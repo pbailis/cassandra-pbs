@@ -21,6 +21,9 @@ package org.apache.cassandra.net;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.cassandra.service.IWriteResponseHandler;
+import org.apache.cassandra.service.ReadCallback;
+
 public class ResponseVerbHandler implements IVerbHandler
 {
     private static final Logger logger_ = LoggerFactory.getLogger( ResponseVerbHandler.class );
@@ -42,6 +45,18 @@ public class ResponseVerbHandler implements IVerbHandler
         {
             if (logger_.isDebugEnabled())
                 logger_.debug("Processing response on a callback from " + id + "@" + message.getFrom());
+
+            if(cb instanceof IWriteResponseHandler)
+            {
+                logger_.info("PBS: message id " + id + "; write response from " + 
+                             message.getFrom() + " at time " + System.currentTimeMillis());
+            }
+            else if(cb instanceof ReadCallback)
+            {
+                logger_.info("PBS: message id " + id + "; read response from " +
+                             message.getFrom() + " at time " + System.currentTimeMillis());
+            }
+
             ((IAsyncCallback) cb).response(message);
         }
         else

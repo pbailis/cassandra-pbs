@@ -50,6 +50,9 @@ public class RowMutationVerbHandler implements IVerbHandler
 
             rm.apply();
 
+            logger_.info("PBS: message id " + id + "; sent write acknowledgment " +
+                         " at time " + System.currentTimeMillis());
+
             WriteResponse response = new WriteResponse(rm.getTable(), rm.key(), true);
             Message responseMessage = WriteResponse.makeWriteResponseMessage(message, response);
             if (logger_.isDebugEnabled())
