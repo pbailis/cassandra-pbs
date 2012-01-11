@@ -15,10 +15,10 @@ To view the WARS latencies, run `nodetool` with the
 `pbswars` option (e.g., `bin/nodetool -h *host* pbswars`).
 
 By default, latencies are presented ordered by which number response
-they correspond to (e.g., the latencies of the first *W*, *A*,
-*R*,*S*, then the second, and so on).  To see unordered latencies
-(useful under independence assumptions), run `nodetool` with
-the `pbswwarsunordered` option.
+they correspond to (e.g., the latencies of the first *W*,*A*,*R*, and
+*S* received for each request, then the second set, and so on).  To
+see unordered latencies (useful under independence assumptions), run
+`nodetool` with the `pbswwarsunordered` option.
 
 #### Caveats
 
