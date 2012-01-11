@@ -25,3 +25,7 @@ see unordered latencies (useful under independence assumptions), run
 The code currently requires globally synchronized clocks and only
 records remote operations.  We can fix the latter if required (e.g.,
 logging local reads as "zero latency").
+
+Also, we currently log (maximum) 10,000 WARS operation latencies
+according to a LRU policy; we can make this number variable in
+`cassandra.yaml`.
