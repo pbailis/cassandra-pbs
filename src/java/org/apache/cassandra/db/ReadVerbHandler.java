@@ -59,7 +59,6 @@ public class ReadVerbHandler implements IVerbHandler
             if (logger_.isDebugEnabled())
               logger_.debug(String.format("Read key %s; sending response to %s@%s",
                                           ByteBufferUtil.bytesToHex(command.key), id, message.getFrom()));
-
             MessagingService.instance().sendReply(reply, id, message.getFrom());
         }
         catch (IOException ex)
