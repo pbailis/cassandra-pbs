@@ -75,6 +75,11 @@ public class Message
         return header_.getFrom();
     }
 
+    public long getCreationTime()
+    {
+        return header_.getCreationTime();
+    }
+
     public Stage getMessageType()
     {
         return StorageService.verbStages.get(getVerb());

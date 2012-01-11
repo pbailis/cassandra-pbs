@@ -60,9 +60,6 @@ public class ReadVerbHandler implements IVerbHandler
               logger_.debug(String.format("Read key %s; sending response to %s@%s",
                                           ByteBufferUtil.bytesToHex(command.key), id, message.getFrom()));
 
-            logger_.info("PBS: message id " + id + "; sending read response " +
-                         " at time " + System.currentTimeMillis());
-
             MessagingService.instance().sendReply(reply, id, message.getFrom());
         }
         catch (IOException ex)

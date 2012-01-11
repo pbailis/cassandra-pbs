@@ -50,6 +50,7 @@ public class Header
     // and RowMutationVerbHandler.forwardToLocalNodes)
     private final InetAddress from_;
     private final StorageService.Verb verb_;
+    private final long creationTime_;
     protected final Map<String, byte[]> details_;
 
     Header(InetAddress from, StorageService.Verb verb)
@@ -64,6 +65,7 @@ public class Header
 
         from_ = from;
         verb_ = verb;
+        creationTime_ = System.currentTimeMillis();
         details_ = ImmutableMap.copyOf(details);
     }
 
@@ -80,6 +82,11 @@ public class Header
     byte[] getDetail(String key)
     {
         return details_.get(key);
+    }
+
+    long getCreationTime()
+    {
+        return creationTime_;
     }
 
     Header withDetailsAdded(String key, byte[] value)
@@ -104,6 +111,7 @@ public class Header
         size += CompactEndpointSerializationHelper.serializedSize(getFrom());
         size += 4;
         size += 4;
+        size += Long.SIZE;
         for (String key : details_.keySet())
         {
             size += 2 + FBUtilities.encodedUTF8Length(key);
@@ -121,6 +129,7 @@ class HeaderSerializer implements IVersionedSerializer<Header>
         CompactEndpointSerializationHelper.serialize(t.getFrom(), dos);
         dos.writeInt(t.getVerb().ordinal());
         dos.writeInt(t.details_.size());
+        dos.writeLong(t.getCreationTime());
         for (String key : t.details_.keySet())
         {
             dos.writeUTF(key);
@@ -135,6 +144,7 @@ class HeaderSerializer implements IVersionedSerializer<Header>
         InetAddress from = CompactEndpointSerializationHelper.deserialize(dis);
         int verbOrdinal = dis.readInt();
         int size = dis.readInt();
+        long creationTime = dis.readLong();
         Map<String, byte[]> details = new Hashtable<String, byte[]>(size);
         for ( int i = 0; i < size; ++i )
         {

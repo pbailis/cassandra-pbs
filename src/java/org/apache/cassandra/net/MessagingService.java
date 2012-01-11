@@ -56,6 +56,7 @@ import org.apache.cassandra.net.io.SerializerType;
 import org.apache.cassandra.net.sink.SinkManager;
 import org.apache.cassandra.security.SSLFactory;
 import org.apache.cassandra.service.IWriteResponseHandler;
+import org.apache.cassandra.service.PBSTracker;
 import org.apache.cassandra.service.ReadCallback;
 import org.apache.cassandra.service.StorageProxy;
 import org.apache.cassandra.service.StorageService;
@@ -393,16 +394,10 @@ public final class MessagingService implements MessagingServiceMBean
     {
         String id = addCallback(cb, message, to, timeout);
 
-	if(cb instanceof IWriteResponseHandler)
-	{
-	    logger_.info("PBS: message id " + id + "; sending write request to " +
-                         to + " at time " + System.currentTimeMillis());
-	}
-	else if(cb instanceof ReadCallback)
-	{
-	    logger_.info("PBS: message id " + id + "; sending read request to " +
-                         to + " at time " + System.currentTimeMillis());
-	}
+        if(cb instanceof IWriteResponseHandler || cb instanceof ReadCallback)
+        {
+            PBSTracker.startOperation(id);
+        }
 
         sendOneWay(message, id, to);
         return id;

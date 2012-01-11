@@ -22,6 +22,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.service.IWriteResponseHandler;
+import org.apache.cassandra.service.PBSTracker;
 import org.apache.cassandra.service.ReadCallback;
 
 public class ResponseVerbHandler implements IVerbHandler
@@ -48,13 +49,11 @@ public class ResponseVerbHandler implements IVerbHandler
 
             if(cb instanceof IWriteResponseHandler)
             {
-                logger_.info("PBS: message id " + id + "; write response from " + 
-                             message.getFrom() + " at time " + System.currentTimeMillis());
+                PBSTracker.logWriteResponse(id, message);
             }
             else if(cb instanceof ReadCallback)
             {
-                logger_.info("PBS: message id " + id + "; read response from " +
-                             message.getFrom() + " at time " + System.currentTimeMillis());
+                PBSTracker.logReadResponse(id, message);
             }
 
             ((IAsyncCallback) cb).response(message);

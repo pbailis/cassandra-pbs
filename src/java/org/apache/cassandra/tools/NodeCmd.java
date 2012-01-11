@@ -32,6 +32,7 @@ import java.util.Map.Entry;
 import java.util.concurrent.ExecutionException;
 
 import org.apache.cassandra.service.CacheServiceMBean;
+import org.apache.cassandra.service.PBSTrackerMBean;
 import org.apache.commons.cli.*;
 
 import org.apache.cassandra.concurrent.JMXEnabledThreadPoolExecutorMBean;
@@ -116,6 +117,8 @@ public class NodeCmd
         UPGRADESSTABLES,
         VERSION,
         DESCRIBERING,
+        PBSWARS,
+        PBSWARSUNORDERED
     }
 
     
@@ -145,6 +148,8 @@ public class NodeCmd
         addCmdHelp(header, "gossipinfo", "Shows the gossip information for the cluster");
         addCmdHelp(header, "invalidatekeycache", "Invalidate the key cache");
         addCmdHelp(header, "invalidaterowcache", "Invalidate the row cache");
+        addCmdHelp(header, "pbswars", "Print out (ordered) WARS latency statistics.");
+        addCmdHelp(header, "pbswarsunordered", "Print out (unordered) WARS latency statistics.");
 
         // One arg
         addCmdHelp(header, "netstats [host]", "Print network information on provided host (connecting node by default)");
@@ -584,6 +589,52 @@ public class NodeCmd
         outs.println(probe.isThriftServerRunning() ? "running" : "not running");
     }
 
+    private void printSpecificLatencyOrdered(String which, Map<Integer, List<Long>> latencies)
+    {
+        List<Integer> replicaNumbers = new ArrayList<Integer>(latencies.keySet());
+        Collections.sort(replicaNumbers);
+
+        System.out.println(which);
+        for(int replicaNo : replicaNumbers)
+        {
+            System.out.println("replica number "+replicaNo);
+            for(long latency : latencies.get(replicaNo))
+            {
+                System.out.println(latency);
+            }
+        }
+    }
+
+    public void printWARSOrdered()
+    {
+        PBSTrackerMBean pbsTracker = probe.getPBSTrackerMBean();
+
+        printSpecificLatencyOrdered("w latencies", pbsTracker.getOrderedWLatencies());
+        printSpecificLatencyOrdered("a latencies", pbsTracker.getOrderedALatencies());
+        printSpecificLatencyOrdered("r latencies", pbsTracker.getOrderedRLatencies());
+        printSpecificLatencyOrdered("s latencies", pbsTracker.getOrderedSLatencies());
+    }
+
+    private void printSpecificLatencyUnordered(String which, List<Long> latencies)
+    {
+        System.out.println(which);
+
+        for(long latency : latencies)
+        {
+            System.out.println(latency);
+        }
+    }
+
+    public void printWARSUnordered()
+    {
+        PBSTrackerMBean pbsTracker = probe.getPBSTrackerMBean();
+
+        printSpecificLatencyUnordered("w latencies", pbsTracker.getUnorderedWLatencies());
+        printSpecificLatencyUnordered("a latencies", pbsTracker.getUnorderedALatencies());
+        printSpecificLatencyUnordered("r latencies", pbsTracker.getUnorderedRLatencies());
+        printSpecificLatencyUnordered("s latencies", pbsTracker.getUnorderedSLatencies());
+    }
+
     public static void main(String[] args) throws IOException, InterruptedException, ConfigurationException, ParseException
     {
         CommandLineParser parser = new PosixParser();
@@ -770,6 +821,14 @@ public class NodeCmd
                 case DESCRIBERING :
                     if (arguments.length != 1) { badUse("Missing keyspace argument for describering."); }
                     nodeCmd.printDescribeRing(arguments[0], System.out);
+                    break;
+
+                case PBSWARS:
+                    nodeCmd.printWARSOrdered();
+                    break;
+
+                case PBSWARSUNORDERED:
+                    nodeCmd.printWARSUnordered();
                     break;
 
                 default :
