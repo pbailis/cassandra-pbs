@@ -9,24 +9,20 @@ Read about PBS here: http://cs.berkeley.edu/~pbailis/projects/pbs/
 #### Overview
 
 This code instruments [Cassandra](https://github.com/apache/cassandra)
-to gather latency traces (*WARS*) for use in modeling.  You'll need to
-parse the output to gather individual latencies; we can provide code
-for this as well upon request.
+to gather latency traces (*WARS*) for use in modeling.
 
-#### Description
+To view the WARS latencies, run <pre>nodetool</pre> with the
+<pre>pbswars</pre> option: e.g., <pre>bin/nodetool -h *host*
+pbswars</pre>
 
-All Cassandra instances log timing locally; to construct *WARS*,
-you'll need to gather the logs from all of the servers.  The write and
-read start times are recorded in
-[net/MessagingService.java](https://github.com/pbailis/cassandra-pbs/blob/trunk/src/java/org/apache/cassandra/net/MessagingService.java).
-Replicas record the time they send a write acknowledgment in
-[db/RowMutationVerbHandler.java](https://github.com/pbailis/cassandra-pbs/blob/trunk/src/java/org/apache/cassandra/db/RowMutationVerbHandler.java)
-and the time they send a read response in
-[db/ReadVerbHandler.java](https://github.com/pbailis/cassandra-pbs/blob/trunk/src/java/org/apache/cassandra/db/ReadVerbHandler.java).
-The coordinator records the time it receives their responses in
-[net/ResponseVerbHandler.java](https://github.com/pbailis/cassandra-pbs/blob/trunk/src/java/org/apache/cassandra/net/ResponseVerbHandler.java).
+By default, latencies are presented ordered by which number response
+they correspond to (e.g., the latencies of the first *W*, *A*,
+*R*,*S*, then the second, and so on).  To see unordered latencies
+(useful under independence assumptions), run <pre>nodetool</pre> with
+the <pre>pbswwarsunordered</pre>.
 
 #### Caveats
 
 The code currently requires globally synchronized clocks and only
-records remote operations.  We can fix the latter if required.
+records remote operations.  We can fix the latter if required (e.g.,
+logging local reads as "zero latency").
