@@ -11,9 +11,8 @@ Read about PBS here: http://cs.berkeley.edu/~pbailis/projects/pbs/
 This code instruments [Cassandra](https://github.com/apache/cassandra)
 to gather latency traces (*WARS*) for use in modeling.
 
-To view the WARS latencies, run <pre>nodetool</pre> with the
-<pre>pbswars</pre> option: e.g., <pre>bin/nodetool -h *host*
-pbswars</pre>
+To view the WARS latencies, run `nodetool` with the
+`pbswars` option: e.g., <pre>bin/nodetool -h *host* pbswars</pre>
 
 By default, latencies are presented ordered by which number response
 they correspond to (e.g., the latencies of the first *W*, *A*,
