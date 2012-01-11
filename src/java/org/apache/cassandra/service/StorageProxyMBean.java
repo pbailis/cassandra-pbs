@@ -18,8 +18,6 @@
 */
 package org.apache.cassandra.service;
 
-import java.util.Vector;
-
 public interface StorageProxyMBean
 {
     public long getReadOperations();

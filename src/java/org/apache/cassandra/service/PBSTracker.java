@@ -20,12 +20,19 @@ package org.apache.cassandra.service;
 
 import org.apache.cassandra.net.Message;
 
-import javax.management.MBeanServer;
-import javax.management.ObjectName;
 import java.lang.management.ManagementFactory;
-import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Queue;
+import java.util.Vector;
+import javax.management.MBeanServer;
+import javax.management.ObjectName;
 
 // Maintains latencies of WARS operations
 // Using LatencyTracker would be nice but would lose order statistic properties
@@ -60,10 +67,14 @@ public class PBSTracker implements PBSTrackerMBean
     // explicitly consider the response time of the ith response, instead of assuming the latencies are
     // independently, identically distributed (IID).
 
-    private static final Map<String, Collection<Long>> messageIdToWLatencies = new ConcurrentHashMap<String, Collection<Long>>();
-    private static final Map<String, Collection<Long>> messageIdToALatencies = new ConcurrentHashMap<String, Collection<Long>>();
-    private static final Map<String, Collection<Long>> messageIdToRLatencies = new ConcurrentHashMap<String, Collection<Long>>();
-    private static final Map<String, Collection<Long>> messageIdToSLatencies = new ConcurrentHashMap<String, Collection<Long>>();
+    private static final Map<String, Collection<Long>> messageIdToWLatencies =
+            new ConcurrentHashMap<String, Collection<Long>>();
+    private static final Map<String, Collection<Long>> messageIdToALatencies =
+            new ConcurrentHashMap<String, Collection<Long>>();
+    private static final Map<String, Collection<Long>> messageIdToRLatencies =
+            new ConcurrentHashMap<String, Collection<Long>>();
+    private static final Map<String, Collection<Long>> messageIdToSLatencies =
+            new ConcurrentHashMap<String, Collection<Long>>();
 
     public static void startOperation(String id)
     {
@@ -102,7 +113,6 @@ public class PBSTracker implements PBSTrackerMBean
         long time = System.currentTimeMillis();
         messageIdToWLatencies.get(id).add(response.getCreationTime()-messageIdToStartTimes.get(id));
         messageIdToALatencies.get(id).add(time-response.getCreationTime());
-        getOrderedLatencies(messageIdToALatencies.values());
     }
 
     public static void logReadResponse(String id, Message response)

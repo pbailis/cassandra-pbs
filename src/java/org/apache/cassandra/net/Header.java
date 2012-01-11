@@ -60,12 +60,17 @@ public class Header
 
     Header(InetAddress from, StorageService.Verb verb, Map<String, byte[]> details)
     {
+        this(from, verb, details, System.currentTimeMillis());
+    }
+
+    Header(InetAddress from, StorageService.Verb verb, Map<String, byte[]> details, long creationTime)
+    {
         assert from != null;
         assert verb != null;
 
         from_ = from;
         verb_ = verb;
-        creationTime_ = System.currentTimeMillis();
+        creationTime_ = creationTime;
         details_ = ImmutableMap.copyOf(details);
     }
 
@@ -154,7 +159,7 @@ class HeaderSerializer implements IVersionedSerializer<Header>
             dis.readFully(bytes);
             details.put(key, bytes);
         }
-        return new Header(from, StorageService.VERBS[verbOrdinal], details);
+        return new Header(from, StorageService.VERBS[verbOrdinal], details, creationTime);
     }
 
     public long serializedSize(Header header, int version)
