@@ -9,7 +9,8 @@ Read about PBS here: http://cs.berkeley.edu/~pbailis/projects/pbs/
 #### Overview
 
 This code instruments [Cassandra](https://github.com/apache/cassandra)
-to gather latency traces (*WARS*) for use in modeling.
+to gather latency traces (*WARS*, in milliseconds) for use in
+modeling.
 
 To view the WARS latencies, run `nodetool` with the
 `pbswars` option (e.g., `bin/nodetool -h *host* pbswars`).
