@@ -48,11 +48,11 @@ see unordered latencies (useful under independence assumptions), run
 To evaluate the probability of consistency given a set of traces, run
 `pbs/analyze_pbs.py *trace-file-name*`.  Parameters are currently
 stored within the Python script and include the replication factor
-(*N*), the time waited after a write before reading (*t*), the number
-of tolerable versions of staleness (*k*), the number of Monte Carlo
-simulations (*ITERATIONS*), and whether or not latencies are
-independently, identically distributed (*IID_assumption*, see Caveats
-section).
+(*N*), the time waited after a write commits before issuing a read
+(*t*), the number of tolerable versions of staleness (*k*), the number
+of Monte Carlo simulations (*ITERATIONS*), and whether or not
+latencies are independently, identically distributed
+(*IID_assumption*, see Caveats section).
 
 #### Example usage
 
