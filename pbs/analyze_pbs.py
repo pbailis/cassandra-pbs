@@ -1,15 +1,27 @@
 
 from pbs_utils import *
+from sys import argv
 
-[Wmodel, Amodel, Rmodel, Smodel] = read_latencies("test.out")
-
-N = 2
+N = 3
 t = 0
 k = 1
 
-ITERATIONS = 10000
+ITERATIONS = 100000
 
-result = calc_prob_fresh(N, 2, 1, t, k, ITERATIONS, Wmodel, Amodel, Rmodel, Smodel)
+IID_assumption = False
+
+if len(argv) != 2:
+    print "usage: python analyze_pbs.py *latencyfile*"
+    exit(-1)
+
+if IID_assumption:
+    latency_parser = read_latencies_IID
+else:
+    latency_parser = read_latencies
+
+[Wmodel, Amodel, Rmodel, Smodel] = latency_parser(argv[1])
+
+print "PBS Analysis Tool\nAt time %.2fms, %d maximum version staleness:\n" % (t, k)
 
 for r in range(1, N+1):
     for w in range(1, N+1):

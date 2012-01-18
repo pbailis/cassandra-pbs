@@ -48,13 +48,31 @@ def calc_prob_fresh(N, R, W, t, k, iterations, Wmodel, Amodel, Rmodel, Smodel):
             if write_time + Rs.pop(replicano) + t >= Ws.pop(replicano):
                 current += 1
                 break
-        
+
+            # remove response in case of duplicate response times;
+            # taken care of in Rs and Ws by pop operation
             readlats.remove(response)
 
     return SimResult(1-pow(float(iterations-current)/iterations, k), 
                      average(all_read_lats), 
                      average(all_write_lats))
 
+'''
+Assumes f is file of following form (all latencies in ms):
+
+w latencies
+replica number 1
+<latencies for replica 1 W in WARS, separated by newlines>
+replica number 2
+<latencies for replica 2 W in WARS, separated by newlines>
+...
+a latencies
+<latencies for each replica's A in WARS, separated by newlines>
+r latencies
+<latencies for each replica's W in WARS, separated by newlines>
+s latencies
+<latencies for each replica's S in WARS, separated by newlines>
+'''
 def read_latencies(f):
     lats = []
     for line in open(f):
@@ -73,4 +91,23 @@ def read_latencies(f):
     lats.append(curlatencies)
 
     return [LatencyModel(lat) for lat in lats]
+
+#assume latencies are independently, identically distributed
+def read_latencies_IID(f):
+    lats = []
+    for line in open(f):
+        line = line.strip('\n')
+        if line == "w latencies":
+            curlatencies = []
+        elif line == "a latencies" or line == "r latencies" or line == "s latencies":
+            lats.append(curlatencies)
+            curlatencies = []
+        elif line.find("replica number") != -1:
+            continue
+        else:
+            curlatencies.append(int(line))
+
+    lats.append(curlatencies)
+
+    return [IIDLatencyModel(lat) for lat in lats]
         
