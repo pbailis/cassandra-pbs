@@ -8,9 +8,11 @@ PBS WARS for Cassandra
 
 This is a clean rewrite of the code we used in our [tech
 report](http://www.eecs.berkeley.edu/Pubs/TechRpts/2012/EECS-2012-4.pdf).
-We've done some rough checks to make sure this code matches our
-original code, but the main purpose of this code is to provide a
-concise, readable implementation of PBS in a real data store.
+The main purpose of this code is to provide a concise, readable
+implementation of PBS in a real data store. We've favored patch
+brevity over optimizations that might be worthwhile someday (e.g.,
+wire protocol changes). We've done some basic checking to ensure that
+this code matches the original implementation from our paper.
 
 We've implemented the analysis portion in Python, but, after making
 some design decisions about the best UI, it'd be trivial (a day or so)
@@ -26,7 +28,12 @@ any questions.
 This code instruments [Cassandra](https://github.com/apache/cassandra)
 to gather latency traces (*WARS*, in milliseconds) for use in modeling
 and uses these traces to predict the probability of consistency based
-on those traces.  ([Basic patch](https://raw.github.com/pbailis/cassandra-pbs/trunk/cassandra-pbs-basic.patch)) ([Basic analysis script](https://github.com/pbailis/cassandra-pbs/blob/trunk/pbs/analyze_pbs.py) and [functions](https://github.com/pbailis/cassandra-pbs/blob/trunk/pbs/pbs_utils.py))
+on those traces.  ([Basic
+patch](https://raw.github.com/pbailis/cassandra-pbs/trunk/cassandra-pbs-basic.patch))
+([Basic analysis
+script](https://github.com/pbailis/cassandra-pbs/blob/trunk/pbs/analyze_pbs.py)
+and
+[functions](https://github.com/pbailis/cassandra-pbs/blob/trunk/pbs/pbs_utils.py))
 
 To view the WARS latencies, run `nodetool` with the
 `pbswars` option (e.g., `bin/nodetool -h *host* pbswars`).
