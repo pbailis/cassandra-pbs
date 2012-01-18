@@ -48,12 +48,12 @@ section).
 
 #### Example usage
 
-`bin/nodetool -h testlatencies.out && python pbs/analyze_pbs.py testlatencies.out`
+`bin/nodetool -h localhost pbswars > testlatencies.out && python pbs/analyze_pbs.py testlatencies.out`
 
 Output:
 <pre>
 PBS Analysis Tool
-At time 0.00ms, 1 maximum version staleness:
+At time 0.00ms and maximum version staleness of k=1:
 
 N=3, R=1, W=1
 Probability of fresh reads: 0.864730
@@ -70,11 +70,12 @@ records remote operations.  We can fix the latter if required (e.g.,
 logging local reads as "zero latency").  This means that if you have
 exactly *n* replicas, you probably won't have enough latency data to
 run simulations where *N*=*n*.  To fix this, you can make IID
-assumptions by setting the *IID_assumption* variable to `True`.
+assumptions by setting the *IID_assumption* variable to `True`.  Note
+that the Python code does *not* make independence assumptions by
+default (as we do in the TR).
 
 We currently log (maximum) 10,000 WARS operation latencies according
 to a LRU policy; we can make this number variable in `cassandra.yaml`.
+The wire protocol can also be made more lightweight (at the expense of
+a more complicated patch!).
 
-Note
-that the Python code does *not* make independence assumptions by
-default (as we do in the TR).

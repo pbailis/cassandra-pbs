@@ -21,7 +21,7 @@ else:
 
 [Wmodel, Amodel, Rmodel, Smodel] = latency_parser(argv[1])
 
-print "PBS Analysis Tool\nAt time %.2fms, %d maximum version staleness:\n" % (t, k)
+print "PBS Analysis Tool\nAt time %.2fms and maximum version staleness of k=%d:\n" % (t, k)
 
 for r in range(1, N+1):
     for w in range(1, N+1):
