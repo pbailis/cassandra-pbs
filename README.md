@@ -1,10 +1,11 @@
-PBS WARS for Cassandra
+PBS for Cassandra
 ==========
 
-*Probabilistically Bounded Staleness describes the probability that an
+*Probabilistically Bounded Staleness (PBS) describes the probability that an
  eventually consistent data store returns consistent data.*
 
-[Read about PBS](http://cs.berkeley.edu/~pbailis/projects/pbs/)
+[You can read about PBS in plain English and play with a cool demo in
+your browser!](http://cs.berkeley.edu/~pbailis/projects/pbs/)
 
 This is a clean rewrite of the code we used in our [tech
 report](http://www.eecs.berkeley.edu/Pubs/TechRpts/2012/EECS-2012-4.pdf).
