@@ -26,7 +26,7 @@ any questions.
 This code instruments [Cassandra](https://github.com/apache/cassandra)
 to gather latency traces (*WARS*, in milliseconds) for use in modeling
 and uses these traces to predict the probability of consistency based
-on those traces.
+on those traces.  ([Basic patch](https://raw.github.com/pbailis/cassandra-pbs/trunk/cassandra-pbs-basic.patch)) ([Basic analysis script](https://github.com/pbailis/cassandra-pbs/blob/trunk/pbs/analyze_pbs.py) and [functions](https://github.com/pbailis/cassandra-pbs/blob/trunk/pbs/pbs_utils.py))
 
 To view the WARS latencies, run `nodetool` with the
 `pbswars` option (e.g., `bin/nodetool -h *host* pbswars`).
