@@ -4,9 +4,24 @@ PBS WARS for Cassandra
 *Probabilistically Bounded Staleness describes the probability that an
  eventually consistent data store returns consistent data.*
 
-Read about PBS here: http://cs.berkeley.edu/~pbailis/projects/pbs/
+[Read about PBS](http://cs.berkeley.edu/~pbailis/projects/pbs/)
 
-#### Overview
+This is a clean rewrite of the code we used in our [tech
+report](http://www.eecs.berkeley.edu/Pubs/TechRpts/2012/EECS-2012-4.pdf).
+We've done some rough checks to make sure this code matches our
+original code, but the main purpose of this code is to provide a
+concise, readable implementation of PBS in a real data store.
+
+We've implemented the analysis portion in Python, but, after making
+some design decisions about the best UI, it'd be trivial (a day or so)
+to implement it in Java and make it accessible via `nodetool` or
+similar.
+
+Please feel free to [contact
+us](http://www.eecs.berkeley.edu/~pbailis/projects/pbs/#moreinfo) with
+any questions.
+
+#### Description
 
 This code instruments [Cassandra](https://github.com/apache/cassandra)
 to gather latency traces (*WARS*, in milliseconds) for use in modeling
@@ -36,7 +51,8 @@ section).
 `bin/nodetool -h testlatencies.out && python pbs/analyze_pbs.py testlatencies.out`
 
 Output:
-`PBS Analysis Tool
+<pre>
+PBS Analysis Tool
 At time 0.00ms, 1 maximum version staleness:
 
 N=3, R=1, W=1
@@ -44,7 +60,8 @@ Probability of fresh reads: 0.864730
 Average read latency 8.70ms
 Average write latency 8.71ms
 
-...`
+...
+</pre>
 
 #### Caveats
 
@@ -58,8 +75,6 @@ assumptions by setting the *IID_assumption* variable to `True`.
 We currently log (maximum) 10,000 WARS operation latencies according
 to a LRU policy; we can make this number variable in `cassandra.yaml`.
 
-This is a clean rewrite of the code we used in our [tech
-report](http://www.eecs.berkeley.edu/Pubs/TechRpts/2012/EECS-2012-4.pdf).
-We've done some rough checks to make sure the simulations align, but
-the main benefit of this code is readability and conciseness.  Note
-that the Python code does *not* make independence assumptions 
+Note
+that the Python code does *not* make independence assumptions by
+default (as we do in the TR).
