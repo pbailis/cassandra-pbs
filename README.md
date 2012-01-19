@@ -9,7 +9,7 @@ your browser!](http://cs.berkeley.edu/~pbailis/projects/pbs/)
 
 This is a clean rewrite of the code we used in our [tech
 report](http://www.eecs.berkeley.edu/Pubs/TechRpts/2012/EECS-2012-4.pdf).
-The main purpose of this Cassandra branch accompanying analysis code
+The main purpose of this Cassandra fork and accompanying analysis code
 is to provide a concise, readable implementation of PBS in a real data
 store. We've favored patch brevity over optimizations that might be
 worthwhile someday (e.g., wire protocol changes). We've done some
