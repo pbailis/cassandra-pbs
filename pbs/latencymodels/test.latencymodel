@@ -1,3 +1,5 @@
+#This file provides synthetic latency distributions for W,A,R,S for N=3
+#If you want to use the file with N>3, you'll need to set assume_iid to True
 w latencies
 replica number 1
 1
