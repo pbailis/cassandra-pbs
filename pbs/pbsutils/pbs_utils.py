@@ -2,9 +2,6 @@
 from latency_model import *
 from sim_result import *
 
-def average(values):
-    return sum(values, 0.0) / len(values)
-
 def calc_prob_fresh(N, R, W, t, k, iterations, Wmodel, Amodel, Rmodel, Smodel):
     current = 0
 
@@ -54,8 +51,8 @@ def calc_prob_fresh(N, R, W, t, k, iterations, Wmodel, Amodel, Rmodel, Smodel):
             readlats.remove(response)
 
     return SimResult(1-pow(float(iterations-current)/iterations, k), 
-                     average(all_read_lats), 
-                     average(all_write_lats))
+                     all_read_lats, 
+                     all_write_lats)
 
 '''
 Assumes f is file of following form (all latencies in ms):
@@ -76,6 +73,8 @@ s latencies
 def read_latencies(f):
     lats = []
     for line in open(f):
+        if line[0] == "#":
+            continue
         line = line.strip('\n')
         if line == "w latencies":
             curlatencies = {}
@@ -86,7 +85,7 @@ def read_latencies(f):
             curreplica = int(line.split()[2])
             curlatencies[curreplica] = []
         else:
-            curlatencies[curreplica].append(int(line))
+            curlatencies[curreplica].append(float(line))
 
     lats.append(curlatencies)
 
@@ -105,9 +104,17 @@ def read_latencies_IID(f):
         elif line.find("replica number") != -1:
             continue
         else:
-            curlatencies.append(int(line))
+            curlatencies.append(float(line))
 
     lats.append(curlatencies)
 
     return [IIDLatencyModel(lat) for lat in lats]
-        
+
+# don't require pylab
+def average(values):
+    return sum(values, 0.0) / len(values)
+
+# likewise; possibly redundant, but portable
+def get_percentile(pctile, arr):
+    arr.sort()
+    return arr[int(len(arr)*pctile)]
