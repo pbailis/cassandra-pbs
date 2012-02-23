@@ -1,5 +1,5 @@
 
-from pbs_utils import *
+from pbsutils.pbs_utils import *
 from sys import argv
 
 N = 3
