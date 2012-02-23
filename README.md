@@ -35,7 +35,7 @@ patch](https://raw.github.com/pbailis/cassandra-pbs/trunk/cassandra-pbs-basic.pa
 ([Basic analysis
 script](https://github.com/pbailis/cassandra-pbs/blob/trunk/pbs/analyze_pbs.py)
 and
-[functions](https://github.com/pbailis/cassandra-pbs/blob/trunk/pbs/pbs_utils.py))
+[functions](https://github.com/pbailis/cassandra-pbs/blob/trunk/pbs/pbsutils/pbs_utils.py))
 
 To view the WARS latencies, run `nodetool` with the
 `pbswars` option (e.g., `bin/nodetool -h *host* pbswars`).
