@@ -85,8 +85,11 @@ def read_latencies(f):
         elif line.find("replica number") != -1:
             curreplica = int(line.split()[2])
             curlatencies[curreplica] = []
+        elif line.startswith("#") is True:
+            # Skip comment lines
+            continue
         else:
-            curlatencies[curreplica].append(int(line))
+            curlatencies[curreplica].append(float(line))
 
     lats.append(curlatencies)
 
@@ -104,8 +107,11 @@ def read_latencies_IID(f):
             curlatencies = []
         elif line.find("replica number") != -1:
             continue
+        elif line.startswith("#") is True:
+            # Skip comment lines
+            continue
         else:
-            curlatencies.append(int(line))
+            curlatencies.append(float(line))
 
     lats.append(curlatencies)
 
