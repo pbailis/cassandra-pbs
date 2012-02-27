@@ -8,9 +8,10 @@ PBS for Cassandra
 your browser!](http://cs.berkeley.edu/~pbailis/projects/pbs/)
 
 This is a clean rewrite of the code we used in our [tech
-report](http://www.eecs.berkeley.edu/Pubs/TechRpts/2012/EECS-2012-4.pdf).
-The main purpose of this Cassandra fork and accompanying analysis code
-is to provide a concise, readable implementation of PBS in a real data
+report](http://www.eecs.berkeley.edu/Pubs/TechRpts/2012/EECS-2012-4.pdf),
+recently accepted to [VLDB 2012](http://www.vldb2012.org).  The main
+purpose of this Cassandra fork and accompanying analysis code is to
+provide a concise, readable implementation of PBS in a real data
 store. We've favored patch brevity over optimizations that might be
 worthwhile someday (e.g., wire protocol changes). We've done some
 basic checking to ensure that this code matches the original
@@ -74,16 +75,16 @@ Average write latency 8.71ms
 ...
 </pre>
 
-#### Caveats
+#### Caveats for the Cassandra patch
 
-The code currently requires globally synchronized clocks and only
-records remote operations.  We can fix the latter if required (e.g.,
-logging local reads as "zero latency").  This means that if you have
-exactly *n* replicas, you probably won't have enough latency data to
-run simulations where *N*=*n*.  To fix this, you can make IID
-assumptions by setting the *IID_assumption* variable to `True`.  Note
-that the Python code does *not* make independence assumptions by
-default (as we do in the TR).
+The latency-gathering code in Cassandra currently requires globally
+synchronized clocks and only records remote operations.  We can fix
+the latter if required (e.g., logging local reads as "zero latency").
+This means that if you have exactly *n* replicas, you probably won't
+have enough latency data to run simulations where *N*=*n*.  To fix
+this, you can make IID assumptions by setting the *IID_assumption*
+variable to `True`.  Note that the Python code does *not* make
+independence assumptions by default (as we do in the TR).
 
 We currently log (maximum) 10,000 WARS operation latencies according
 to a LRU policy; we can make this number variable in `cassandra.yaml`.
