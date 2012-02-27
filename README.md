@@ -58,7 +58,7 @@ not latencies are independently, identically distributed
 #### Example usage
 
 `bin/nodetool -h localhost pbswars > testlatencies.out` then edit
-`pbs/pbs-params.yaml` so `latencymodel: testlatencies.out`, then run
+`pbs/pbs-params.yaml` so `latencymodel` points to `testlatencies.out`, then run
 `python pbs/analyze_pbs.py`:
 
 Output:
