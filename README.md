@@ -47,17 +47,19 @@ see unordered latencies (useful under independence assumptions), run
 `nodetool` with the `pbswwarsunordered` option.
 
 To evaluate the probability of consistency given a set of traces, run
-`pbs/analyze_pbs.py *trace-file-name*`.  Parameters are currently
-stored within the Python script and include the replication factor
-(*N*), the time waited after a write commits before issuing a read
-(*t*), the number of tolerable versions of staleness (*k*), the number
-of Monte Carlo simulations (*ITERATIONS*), and whether or not
-latencies are independently, identically distributed
+`pbs/analyze_pbs.py`.  Parameters are currently stored within
+`pbs/pbs-params.yaml` and include the replication factor (*N*), the
+time waited after a write commits before issuing a read (*t*, or
+*t*-visibility), the number of tolerable versions of staleness (*k*),
+the number of Monte Carlo simulations (*ITERATIONS*), and whether or
+not latencies are independently, identically distributed
 (*IID_assumption*, see Caveats section).
 
 #### Example usage
 
-`bin/nodetool -h localhost pbswars > testlatencies.out && python pbs/analyze_pbs.py testlatencies.out`
+`bin/nodetool -h localhost pbswars > testlatencies.out` then edit
+`pbs/pbs-params.yaml` so `latencymodel: testlatencies.out`, then run
+`python pbs/analyze_pbs.py`:
 
 Output:
 <pre>

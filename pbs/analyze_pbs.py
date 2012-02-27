@@ -3,7 +3,11 @@ from pbsutils.pbs_utils import *
 from sys import argv
 import yaml
 
-config = yaml.load(open("pbs-params.yaml"))
+try:
+    config = yaml.load(open("pbs-params.yaml"))
+except IOError:
+    config = yaml.load(open("pbs/pbs-params.yaml"))
+    config["latencymodel"] = "pbs/"+config["latencymodel"] 
 
 N = config["N"]
 t = config["t"]
@@ -16,6 +20,7 @@ else:
     latency_parser = read_latencies
 
 [Wmodel, Amodel, Rmodel, Smodel] = latency_parser(config["latencymodel"])
+
 
 print "PBS Analysis Tool\nAt time %.2fms and maximum version staleness of k=%d:\n" % (t, k)
 
