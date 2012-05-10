@@ -1,6 +1,6 @@
 package org.apache.cassandra.cache;
 /*
- * 
+ *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,29 +8,26 @@ package org.apache.cassandra.cache;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *   http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
- * 
+ *
  */
 
 
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-
 import org.junit.Test;
 
 import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.db.ColumnFamily;
-import org.apache.cassandra.db.IColumn;
-
 import static org.apache.cassandra.Util.column;
 import static org.junit.Assert.*;
 
@@ -55,7 +52,7 @@ public class CacheProviderTest extends SchemaLoader
         cache.put(key3, cf);
         cache.put(key4, cf);
         cache.put(key5, cf);
-        
+
         assertEquals(CAPACITY, cache.size());
     }
 
@@ -101,7 +98,7 @@ public class CacheProviderTest extends SchemaLoader
         cf.addColumn(column("awesome", "vijay", 1));
         return cf;
     }
-    
+
     @Test
     public void testHeapCache() throws InterruptedException
     {
@@ -114,9 +111,25 @@ public class CacheProviderTest extends SchemaLoader
     @Test
     public void testSerializingCache() throws InterruptedException
     {
-        ICache<String, ColumnFamily> cache = new SerializingCache<String, ColumnFamily>(CAPACITY, false, ColumnFamily.serializer());
+        ICache<String, ColumnFamily> cache = new SerializingCache<String, ColumnFamily>(CAPACITY, false, ColumnFamily.serializer);
         ColumnFamily cf = createCF();
         simpleCase(cf, cache);
         concurrentCase(cf, cache);
+    }
+    
+    @Test
+    public void testKeys()
+    {
+        byte[] b1 = {1, 2, 3, 4};
+        RowCacheKey key1 = new RowCacheKey(123, ByteBuffer.wrap(b1));
+        byte[] b2 = {1, 2, 3, 4};
+        RowCacheKey key2 = new RowCacheKey(123, ByteBuffer.wrap(b2));
+        assertEquals(key1, key2);
+        assertEquals(key1.hashCode(), key2.hashCode());
+        
+        byte[] b3 = {1, 2, 3, 5};
+        RowCacheKey key3 = new RowCacheKey(123, ByteBuffer.wrap(b3));
+        assertNotSame(key1, key3);
+        assertNotSame(key1.hashCode(), key3.hashCode());
     }
 }

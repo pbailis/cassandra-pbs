@@ -1,6 +1,4 @@
-package org.apache.cassandra.cql.jdbc;
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,18 +6,16 @@ package org.apache.cassandra.cql.jdbc;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-
+package org.apache.cassandra.cql.jdbc;
 
 import java.nio.ByteBuffer;
 import java.sql.Types;
@@ -43,12 +39,18 @@ public class JdbcDate extends AbstractJdbcType<Date>
         "yyyy-MM-ddZ"
     };
     static final String DEFAULT_FORMAT = iso8601Patterns[3];
-    static final SimpleDateFormat FORMATTER = new SimpleDateFormat(DEFAULT_FORMAT);
-    
+    static final ThreadLocal<SimpleDateFormat> FORMATTER = new ThreadLocal<SimpleDateFormat>()
+    {
+        protected SimpleDateFormat initialValue()
+        {
+            return new SimpleDateFormat(DEFAULT_FORMAT);
+        }
+    };
+
     public static final JdbcDate instance = new JdbcDate();
-    
+
     JdbcDate() {}
-    
+
     public boolean isCaseSensitive()
     {
         return false;
@@ -76,7 +78,7 @@ public class JdbcDate extends AbstractJdbcType<Date>
 
     public String toString(Date obj)
     {
-        return FORMATTER.format(obj);
+        return FORMATTER.get().format(obj);
     }
 
     public boolean needsQuotes()
@@ -94,9 +96,9 @@ public class JdbcDate extends AbstractJdbcType<Date>
         {
             throw new MarshalException("A date is exactly 8 bytes (stored as a long): " + bytes.remaining());
         }
-        
+
         // uses ISO-8601 formatted string
-        return FORMATTER.format(new Date(bytes.getLong(bytes.position())));
+        return FORMATTER.get().format(new Date(bytes.getLong(bytes.position())));
     }
 
     public Class<Date> getType()
@@ -113,4 +115,11 @@ public class JdbcDate extends AbstractJdbcType<Date>
     {
         return new Date(ByteBufferUtil.toLong(bytes));
     }
+
+    public ByteBuffer decompose(Date value)
+    {
+      return (value==null) ? ByteBufferUtil.EMPTY_BYTE_BUFFER
+                           : ByteBufferUtil.bytes(value.getTime());
+    }
+
 }

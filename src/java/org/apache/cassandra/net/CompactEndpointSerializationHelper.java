@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.net;
 
 import java.io.*;
@@ -31,9 +30,9 @@ public class CompactEndpointSerializationHelper
         dos.writeByte(buf.length);
         dos.write(buf);
     }
-    
+
     public static InetAddress deserialize(DataInput dis) throws IOException
-    {     
+    {
         byte[] bytes = new byte[dis.readByte()];
         dis.readFully(bytes, 0, bytes.length);
         return InetAddress.getByAddress(bytes);

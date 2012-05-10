@@ -22,15 +22,13 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 
-import com.google.common.base.Charsets;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
-import org.apache.cassandra.CleanupHelper;
-import org.apache.cassandra.config.CFMetaData;
+import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.config.ConfigurationException;
 import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.config.KSMetaData;
+import org.apache.cassandra.config.Schema;
 import org.apache.cassandra.thrift.*;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.thrift.TException;
@@ -50,7 +48,7 @@ import static org.junit.Assert.assertNotNull;
  * Tests connect to localhost:9160 when the embedded server is running.
  *
  */
-public class EmbeddedCassandraServiceTest extends CleanupHelper
+public class EmbeddedCassandraServiceTest extends SchemaLoader
 {
 
     private static EmbeddedCassandraService cassandra;
@@ -65,6 +63,7 @@ public class EmbeddedCassandraServiceTest extends CleanupHelper
     @BeforeClass
     public static void setup() throws TTransportException, IOException, InterruptedException, ConfigurationException
     {
+        Schema.instance.clear(); // Schema are now written on disk and will be reloaded
         cassandra = new EmbeddedCassandraService();
         cassandra.start();
     }
@@ -77,7 +76,7 @@ public class EmbeddedCassandraServiceTest extends CleanupHelper
         client.set_keyspace("Keyspace1");
 
         ByteBuffer key_user_id = ByteBufferUtil.bytes("1");
-        
+
         long timestamp = System.currentTimeMillis();
         ColumnPath cp = new ColumnPath("Standard1");
         ColumnParent par = new ColumnParent("Standard1");

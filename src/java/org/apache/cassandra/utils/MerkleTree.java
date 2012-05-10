@@ -1,34 +1,36 @@
 /*
-* Licensed to the Apache Software Foundation (ASF) under one
-* or more contributor license agreements.  See the NOTICE file
-* distributed with this work for additional information
-* regarding copyright ownership.  The ASF licenses this file
-* to you under the Apache License, Version 2.0 (the
-* "License"); you may not use this file except in compliance
-* with the License.  You may obtain a copy of the License at
-*
-*    http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing,
-* software distributed under the License is distributed on an
-* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-* KIND, either express or implied.  See the License for the
-* specific language governing permissions and limitations
-* under the License.
-*/
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.apache.cassandra.utils;
 
-import java.io.*;
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
+import java.io.Serializable;
 import java.util.*;
 
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.PeekingIterator;
 
+import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.io.IVersionedSerializer;
-import org.apache.cassandra.net.MessagingService;
 
 /**
  * A MerkleTree implemented as a binary tree.
@@ -40,12 +42,12 @@ import org.apache.cassandra.net.MessagingService;
  * full depth of the perfect binary tree: the leaves of this tree are Leaf objects,
  * which contain the computed values of the nodes that would be below them if
  * the tree were perfect.
- * 
+ *
  * The hash values of the inner nodes of the MerkleTree are calculated lazily based
  * on their children when the hash of a range is requested with hash(range).
  *
  * Inputs passed to TreeRange.validate should be calculated using a very secure hash,
- * because all hashing internal to the tree is accomplished using XOR. 
+ * because all hashing internal to the tree is accomplished using XOR.
  *
  * If two MerkleTrees have the same hashdepth, they represent a perfect tree
  * of the same depth, and can always be compared, regardless of size or splits.
@@ -73,54 +75,40 @@ public class MerkleTree implements Serializable
      */
     public transient Range<Token> fullRange;
 
+    // TODO This is broken; Token serialization assumes system partitioner, so if this doesn't match all hell breaks loose
     private transient IPartitioner partitioner;
 
     private long maxsize;
     private long size;
     private Hashable root;
-    
-    public static class MerkleTreeSerializer
+
+    public static class MerkleTreeSerializer implements IVersionedSerializer<MerkleTree>
     {
-        public void serialize(MerkleTree mt, DataOutputStream dos, int version) throws IOException
+        public void serialize(MerkleTree mt, DataOutput dos, int version) throws IOException
         {
-            if (version == MessagingService.VERSION_07)
-            {
-                ObjectOutputStream out = new ObjectOutputStream(dos);
-                out.writeObject(mt);
-            }
-            else
-            {
-                dos.writeByte(mt.hashdepth);
-                dos.writeLong(mt.maxsize);
-                dos.writeLong(mt.size);
-                Hashable.serializer.serialize(mt.root, dos, version);
-            }
+            dos.writeByte(mt.hashdepth);
+            dos.writeLong(mt.maxsize);
+            dos.writeLong(mt.size);
+            Hashable.serializer.serialize(mt.root, dos, version);
         }
 
-        public MerkleTree deserialize(DataInputStream dis, int version) throws IOException
+        public MerkleTree deserialize(DataInput dis, int version) throws IOException
         {
-            if (version == MessagingService.VERSION_07)
-            {
-                ObjectInputStream in = new ObjectInputStream(dis);
-                try
-                {
-                    return (MerkleTree)in.readObject();
-                }
-                catch (ClassNotFoundException ex)
-                {
-                    throw new IOException(ex);
-                }
-            }
-            else
-            {
-                byte hashdepth = dis.readByte();
-                long maxsize = dis.readLong();
-                long size = dis.readLong();
-                MerkleTree mt = new MerkleTree(null, null, hashdepth, maxsize);
-                mt.size = size;
-                mt.root = Hashable.serializer.deserialize(dis, version);
-                return mt;
-            }
+            byte hashdepth = dis.readByte();
+            long maxsize = dis.readLong();
+            long size = dis.readLong();
+            MerkleTree mt = new MerkleTree(null, null, hashdepth, maxsize);
+            mt.size = size;
+            mt.root = Hashable.serializer.deserialize(dis, version);
+            return mt;
+        }
+
+        public long serializedSize(MerkleTree mt, int version)
+        {
+            return TypeSizes.NATIVE.sizeof(mt.hashdepth)
+                 + TypeSizes.NATIVE.sizeof(mt.maxsize)
+                 + TypeSizes.NATIVE.sizeof(mt.size)
+                 + Hashable.serializer.serializedSize(mt.root, version);
         }
     }
 
@@ -230,7 +218,7 @@ public class MerkleTree implements Serializable
 
         List<TreeRange> diff = new ArrayList<TreeRange>();
         TreeRange active = new TreeRange(null, ltree.fullRange.left, ltree.fullRange.right, (byte)0, null);
-        
+
         byte[] lhash = ltree.hash(active);
         byte[] rhash = rtree.hash(active);
 
@@ -258,7 +246,7 @@ public class MerkleTree implements Serializable
         TreeRange right = new TreeRange(null, midpoint, active.right, inc(active.depth), null);
         byte[] lhash;
         byte[] rhash;
-        
+
         // see if we should recurse left
         lhash = ltree.hash(left);
         rhash = rtree.hash(left);
@@ -315,7 +303,7 @@ public class MerkleTree implements Serializable
             return new TreeRange(this, pleft, pright, depth, hashable);
         }
         // else: node.
-        
+
         Inner node = (Inner)hashable;
         if (Range.contains(pleft, node.token, t))
             // left child contains token
@@ -384,7 +372,7 @@ public class MerkleTree implements Serializable
             return hashable.hash();
         }
         // else: node.
-        
+
         Inner node = (Inner)hashable;
         Range<Token> leftactive = new Range<Token>(active.left, node.token);
         Range<Token> rightactive = new Range<Token>(node.token, active.right);
@@ -402,7 +390,7 @@ public class MerkleTree implements Serializable
             node.hash(lhash, rhash);
             return node.hash();
         } // else: one of our children contains the range
-        
+
         if (leftactive.contains(range))
             // left child contains/matches the range
             return hashHelper(node.lchild, leftactive, range);
@@ -435,7 +423,7 @@ public class MerkleTree implements Serializable
         }
         return true;
     }
-    
+
     private Hashable splitHelper(Hashable hashable, Token pleft, Token pright, byte depth, Token t) throws StopRecursion.TooDeep
     {
         if (depth >= hashdepth)
@@ -568,7 +556,7 @@ public class MerkleTree implements Serializable
             tovisit.add(new TreeRange(tree, tree.fullRange.left, tree.fullRange.right, (byte)0, tree.root));
             this.tree = tree;
         }
-        
+
         /**
          * Find the next TreeRange.
          *
@@ -608,7 +596,7 @@ public class MerkleTree implements Serializable
             }
             return endOfData();
         }
-        
+
         public Iterator<TreeRange> iterator()
         {
             return this;
@@ -627,8 +615,8 @@ public class MerkleTree implements Serializable
         private Hashable lchild;
         private Hashable rchild;
 
-        private static InnerSerializer serializer = new InnerSerializer();
-        
+        private static final InnerSerializer serializer = new InnerSerializer();
+
         /**
          * Constructs an Inner with the given token and children, and a null hash.
          */
@@ -695,8 +683,8 @@ public class MerkleTree implements Serializable
             toString(buff, 1);
             return buff.toString();
         }
-        
-        private static class InnerSerializer
+
+        private static class InnerSerializer implements IVersionedSerializer<Inner>
         {
             public void serialize(Inner inner, DataOutput dos, int version) throws IOException
             {
@@ -707,7 +695,7 @@ public class MerkleTree implements Serializable
                     dos.writeInt(inner.hash.length);
                     dos.write(inner.hash);
                 }
-                Token.serializer().serialize(inner.token, dos);
+                Token.serializer.serialize(inner.token, dos);
                 Hashable.serializer.serialize(inner.lchild, dos, version);
                 Hashable.serializer.serialize(inner.rchild, dos, version);
             }
@@ -718,10 +706,22 @@ public class MerkleTree implements Serializable
                 byte[] hash = hashLen >= 0 ? new byte[hashLen] : null;
                 if (hash != null)
                     dis.readFully(hash);
-                Token token = Token.serializer().deserialize(dis);
+                Token token = Token.serializer.deserialize(dis);
                 Hashable lchild = Hashable.serializer.deserialize(dis, version);
                 Hashable rchild = Hashable.serializer.deserialize(dis, version);
                 return new Inner(token, lchild, rchild);
+            }
+
+            public long serializedSize(Inner inner, int version)
+            {
+                int size = inner.hash == null
+                         ? TypeSizes.NATIVE.sizeof(-1)
+                         : TypeSizes.NATIVE.sizeof(inner.hash().length) + inner.hash().length;
+
+                size += Token.serializer.serializedSize(inner.token, TypeSizes.NATIVE)
+                        + Hashable.serializer.serializedSize(inner.lchild, version)
+                        + Hashable.serializer.serializedSize(inner.rchild, version);
+                return size;
             }
         }
     }
@@ -739,8 +739,8 @@ public class MerkleTree implements Serializable
     {
         public static final long serialVersionUID = 1L;
         static final byte IDENT = 1;
-        private static LeafSerializer serializer = new LeafSerializer();
-        
+        private static final LeafSerializer serializer = new LeafSerializer();
+
         /**
          * Constructs a null hash.
          */
@@ -763,19 +763,21 @@ public class MerkleTree implements Serializable
         {
             buff.append(toString());
         }
-        
+
         @Override
         public String toString()
         {
             return "#<Leaf " + Hashable.toString(hash()) + ">";
         }
 
-        private static class LeafSerializer
+        private static class LeafSerializer implements IVersionedSerializer<Leaf>
         {
-            public void serialize(Leaf leaf, DataOutput dos) throws IOException
+            public void serialize(Leaf leaf, DataOutput dos, int version) throws IOException
             {
                 if (leaf.hash == null)
+                {
                     dos.writeInt(-1);
+                }
                 else
                 {
                     dos.writeInt(leaf.hash.length);
@@ -783,13 +785,20 @@ public class MerkleTree implements Serializable
                 }
             }
 
-            public Leaf deserialize(DataInput dis) throws IOException
+            public Leaf deserialize(DataInput dis, int version) throws IOException
             {
                 int hashLen = dis.readInt();
                 byte[] hash = hashLen < 0 ? null : new byte[hashLen];
                 if (hash != null)
                     dis.readFully(hash);
                 return new Leaf(hash);
+            }
+
+            public long serializedSize(Leaf leaf, int version)
+            {
+                return leaf.hash == null
+                     ? TypeSizes.NATIVE.sizeof(-1)
+                     : TypeSizes.NATIVE.sizeof(leaf.hash().length) + leaf.hash().length;
             }
         }
     }
@@ -805,24 +814,24 @@ public class MerkleTree implements Serializable
         public final byte[] hash;
         public RowHash(Token token, byte[] hash)
         {
-            this.token = token;      
+            this.token = token;
             this.hash  = hash;
         }
-        
+
         @Override
         public String toString()
         {
             return "#<RowHash " + token + " " + Hashable.toString(hash) + ">";
         }
     }
-    
+
     /**
      * Abstract class containing hashing logic, and containing a single hash field.
      */
     static abstract class Hashable implements Serializable
     {
         private static final long serialVersionUID = 1L;
-        private static IVersionedSerializer<Hashable> serializer = new HashableSerializer();
+        private static final IVersionedSerializer<Hashable> serializer = new HashableSerializer();
 
         protected byte[] hash;
 
@@ -873,19 +882,19 @@ public class MerkleTree implements Serializable
         }
 
         public abstract void toString(StringBuilder buff, int maxdepth);
-        
+
         public static String toString(byte[] hash)
         {
             if (hash == null)
                 return "null";
             return "[" + Hex.bytesToHex(hash) + "]";
         }
-        
+
         private static class HashableSerializer implements IVersionedSerializer<Hashable>
         {
             public void serialize(Hashable h, DataOutput dos, int version) throws IOException
             {
-                if (h instanceof Inner) 
+                if (h instanceof Inner)
                 {
                     dos.writeByte(Inner.IDENT);
                     Inner.serializer.serialize((Inner)h, dos, version);
@@ -893,7 +902,7 @@ public class MerkleTree implements Serializable
                 else if (h instanceof Leaf)
                 {
                     dos.writeByte(Leaf.IDENT);
-                    Leaf.serializer.serialize((Leaf)h, dos);
+                    Leaf.serializer.serialize((Leaf) h, dos, version);
                 }
                 else
                     throw new IOException("Unexpected Hashable: " + h.getClass().getCanonicalName());
@@ -905,14 +914,18 @@ public class MerkleTree implements Serializable
                 if (Inner.IDENT == ident)
                     return Inner.serializer.deserialize(dis, version);
                 else if (Leaf.IDENT == ident)
-                    return Leaf.serializer.deserialize(dis);
+                    return Leaf.serializer.deserialize(dis, version);
                 else
                     throw new IOException("Unexpected Hashable: " + ident);
             }
 
-            public long serializedSize(Hashable hashable, int version)
+            public long serializedSize(Hashable h, int version)
             {
-                throw new UnsupportedOperationException();
+                if (h instanceof Inner)
+                    return 1 + Inner.serializer.serializedSize((Inner) h, version);
+                else if (h instanceof Leaf)
+                    return 1 + Leaf.serializer.serializedSize((Leaf) h, version);
+                throw new AssertionError(h.getClass());
             }
         }
     }

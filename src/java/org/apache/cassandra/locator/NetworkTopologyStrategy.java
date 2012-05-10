@@ -1,5 +1,4 @@
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -7,34 +6,29 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-
 package org.apache.cassandra.locator;
 
 import java.net.InetAddress;
 import java.util.*;
 import java.util.Map.Entry;
 
-import com.google.common.collect.Multimap;
 import org.apache.commons.lang.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.config.ConfigurationException;
 import org.apache.cassandra.dht.Token;
-import org.apache.cassandra.service.*;
-import org.apache.cassandra.thrift.ConsistencyLevel;
 import org.apache.cassandra.utils.FBUtilities;
+import org.apache.cassandra.utils.Pair;
 
 /**
  * This Replication Strategy takes a property file that gives the intended
@@ -86,13 +80,16 @@ public class NetworkTopologyStrategy extends AbstractReplicationStrategy
             String dcName = dcEntry.getKey();
             int dcReplicas = dcEntry.getValue();
 
-            // collect endpoints in this DC
-            TokenMetadata dcTokens = new TokenMetadata();
-            for (Entry<Token, InetAddress> tokenEntry : tokenMetadata.entrySet())
+            // collect endpoints in this DC; add in bulk to token meta data for computational complexity
+            // reasons (CASSANDRA-3831).
+            Set<Pair<Token, InetAddress>> dcTokensToUpdate = new HashSet<Pair<Token, InetAddress>>();
+            for (Entry<Token, InetAddress> tokenEntry : tokenMetadata.getTokenToEndpointMapForReading().entrySet())
             {
                 if (snitch.getDatacenter(tokenEntry.getValue()).equals(dcName))
-                    dcTokens.updateNormalToken(tokenEntry.getKey(), tokenEntry.getValue());
+                    dcTokensToUpdate.add(Pair.create(tokenEntry.getKey(), tokenEntry.getValue()));
             }
+            TokenMetadata dcTokens = new TokenMetadata();
+            dcTokens.updateNormalTokens(dcTokensToUpdate);
 
             List<InetAddress> dcEndpoints = new ArrayList<InetAddress>(dcReplicas);
             Set<String> racks = new HashSet<String>();

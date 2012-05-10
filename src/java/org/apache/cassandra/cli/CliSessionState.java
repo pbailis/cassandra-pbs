@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.cli;
 
 import org.apache.cassandra.tools.NodeProbe;
@@ -31,7 +30,7 @@ public class CliSessionState
 
     public String  hostName;      // cassandra server name
     public int     thriftPort;    // cassandra server's thrift port
-    public boolean framed = true; // cassandra server's framed transport 
+    public boolean framed = true; // cassandra server's framed transport
     public boolean debug = false; // print stack traces when errors occur in the CLI
     public String  username;      // cassandra login name (if SimpleAuthenticator is used)
     public String  password;      // cassandra login password (if SimpleAuthenticator is used)
@@ -40,7 +39,7 @@ public class CliSessionState
     public String  filename = ""; // file to read commands from
     public int     jmxPort = 7199;// JMX service port
     public boolean verbose = false; // verbose output
-    public int     schema_mwt;    // Schema migration wait time (secs.)
+    public int     schema_mwt = 10 * 1000;    // Schema migration wait time (secs.)
     /*
      * Streams to read/write from
      */
@@ -57,7 +56,7 @@ public class CliSessionState
 
     public void setOut(PrintStream newOut)
     {
-        this.out = newOut;   
+        this.out = newOut;
     }
 
     public void setErr(PrintStream newErr)

@@ -1,6 +1,4 @@
-package org.apache.cassandra.utils.IntervalTree;
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,18 +6,16 @@ package org.apache.cassandra.utils.IntervalTree;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-
+package org.apache.cassandra.utils.IntervalTree;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -53,6 +49,11 @@ public class IntervalNode
             //if i.max < v_pt then it goes to the left subtree
             List<Interval> leftSegment = getLeftIntervals(toBisect);
             List<Interval> rightSegment = getRightIntervals(toBisect);
+            assert (intersects.size() + leftSegment.size() + rightSegment.size()) == toBisect.size() :
+                    "intersects (" + String.valueOf(intersects.size()) +
+                    ") + leftSegment (" + String.valueOf(leftSegment.size()) +
+                    ") + rightSegment (" + String.valueOf(rightSegment.size()) +
+                    ") != toBisect (" + String.valueOf(toBisect.size()) + ")";
             if (leftSegment.size() > 0)
                 this.left = new IntervalNode(leftSegment);
             if (rightSegment.size() > 0)
@@ -102,6 +103,7 @@ public class IntervalNode
 
             for (Interval interval : intervals)
             {
+                assert interval.min.compareTo(interval.max) <= 0 : "Interval min > max";
                 allEndpoints.add(interval.min);
                 allEndpoints.add(interval.max);
             }

@@ -1,6 +1,6 @@
 package org.apache.cassandra.hadoop;
 /*
- * 
+ *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,30 +8,35 @@ package org.apache.cassandra.hadoop;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *   http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
- * 
+ *
  */
+
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+
+import org.apache.cassandra.io.compress.CompressionParameters;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.config.ConfigurationException;
 import org.apache.cassandra.dht.IPartitioner;
-import org.apache.cassandra.thrift.Cassandra;
-import org.apache.cassandra.thrift.KeyRange;
-import org.apache.cassandra.thrift.SlicePredicate;
-import org.apache.cassandra.thrift.TBinaryProtocol;
+import org.apache.cassandra.thrift.*;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.Hex;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.thrift.TBase;
 import org.apache.thrift.TDeserializer;
 import org.apache.thrift.TException;
 import org.apache.thrift.TSerializer;
@@ -39,13 +44,12 @@ import org.apache.thrift.transport.TFramedTransport;
 import org.apache.thrift.transport.TSocket;
 import org.apache.thrift.transport.TTransport;
 import org.apache.thrift.transport.TTransportException;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 
 public class ConfigHelper
 {
-    private static final String PARTITIONER_CONFIG = "cassandra.partitioner.class";
+    private static final String INPUT_PARTITIONER_CONFIG = "cassandra.input.partitioner.class";
+    private static final String OUTPUT_PARTITIONER_CONFIG = "cassandra.output.partitioner.class";
     private static final String INPUT_KEYSPACE_CONFIG = "cassandra.input.keyspace";
     private static final String OUTPUT_KEYSPACE_CONFIG = "cassandra.output.keyspace";
     private static final String INPUT_KEYSPACE_USERNAME_CONFIG = "cassandra.input.keyspace.username";
@@ -56,28 +60,32 @@ public class ConfigHelper
     private static final String OUTPUT_COLUMNFAMILY_CONFIG = "cassandra.output.columnfamily";
     private static final String INPUT_PREDICATE_CONFIG = "cassandra.input.predicate";
     private static final String INPUT_KEYRANGE_CONFIG = "cassandra.input.keyRange";
-    private static final String OUTPUT_PREDICATE_CONFIG = "cassandra.output.predicate";
     private static final String INPUT_SPLIT_SIZE_CONFIG = "cassandra.input.split.size";
+    private static final String INPUT_WIDEROWS_CONFIG = "cassandra.input.widerows";
     private static final int DEFAULT_SPLIT_SIZE = 64 * 1024;
     private static final String RANGE_BATCH_SIZE_CONFIG = "cassandra.range.batch.size";
     private static final int DEFAULT_RANGE_BATCH_SIZE = 4096;
-    private static final String THRIFT_PORT = "cassandra.thrift.port";
-    private static final String INITIAL_THRIFT_ADDRESS = "cassandra.thrift.address";
+    private static final String INPUT_THRIFT_PORT = "cassandra.input.thrift.port";
+    private static final String OUTPUT_THRIFT_PORT = "cassandra.output.thrift.port";
+    private static final String INPUT_INITIAL_THRIFT_ADDRESS = "cassandra.input.thrift.address";
+    private static final String OUTPUT_INITIAL_THRIFT_ADDRESS = "cassandra.output.thrift.address";
     private static final String READ_CONSISTENCY_LEVEL = "cassandra.consistencylevel.read";
     private static final String WRITE_CONSISTENCY_LEVEL = "cassandra.consistencylevel.write";
-    
+    private static final String OUTPUT_COMPRESSION_CLASS = "cassandra.output.compression.class";
+    private static final String OUTPUT_COMPRESSION_CHUNK_LENGTH = "cassandra.output.compression.length";
+
     private static final Logger logger = LoggerFactory.getLogger(ConfigHelper.class);
 
 
     /**
      * Set the keyspace and column family for the input of this job.
-     * Comparator and Partitioner types will be read from storage-conf.xml.
      *
      * @param conf         Job configuration you are about to run
      * @param keyspace
      * @param columnFamily
+     * @param widerows
      */
-    public static void setInputColumnFamily(Configuration conf, String keyspace, String columnFamily)
+    public static void setInputColumnFamily(Configuration conf, String keyspace, String columnFamily, boolean widerows)
     {
         if (keyspace == null)
         {
@@ -90,6 +98,19 @@ public class ConfigHelper
 
         conf.set(INPUT_KEYSPACE_CONFIG, keyspace);
         conf.set(INPUT_COLUMNFAMILY_CONFIG, columnFamily);
+        conf.set(INPUT_WIDEROWS_CONFIG, String.valueOf(widerows));
+    }
+
+    /**
+     * Set the keyspace and column family for the input of this job.
+     *
+     * @param conf         Job configuration you are about to run
+     * @param keyspace
+     * @param columnFamily
+     */
+    public static void setInputColumnFamily(Configuration conf, String keyspace, String columnFamily)
+    {
+        setInputColumnFamily(conf, keyspace, columnFamily, false);
     }
 
     /**
@@ -168,27 +189,23 @@ public class ConfigHelper
      */
     public static void setInputSlicePredicate(Configuration conf, SlicePredicate predicate)
     {
-        conf.set(INPUT_PREDICATE_CONFIG, predicateToString(predicate));
+        conf.set(INPUT_PREDICATE_CONFIG, thriftToString(predicate));
     }
 
     public static SlicePredicate getInputSlicePredicate(Configuration conf)
     {
-        return predicateFromString(conf.get(INPUT_PREDICATE_CONFIG));
+        String s = conf.get(INPUT_PREDICATE_CONFIG);
+        return s == null ? null : predicateFromString(s);
     }
 
-    public static String getRawInputSlicePredicate(Configuration conf)
+    private static String thriftToString(TBase object)
     {
-        return conf.get(INPUT_PREDICATE_CONFIG);
-    }
-
-    private static String predicateToString(SlicePredicate predicate)
-    {
-        assert predicate != null;
+        assert object != null;
         // this is so awful it's kind of cool!
         TSerializer serializer = new TSerializer(new TBinaryProtocol.Factory());
         try
         {
-            return Hex.bytesToHex(serializer.serialize(predicate));
+            return Hex.bytesToHex(serializer.serialize(object));
         }
         catch (TException e)
         {
@@ -219,7 +236,27 @@ public class ConfigHelper
     public static void setInputRange(Configuration conf, String startToken, String endToken)
     {
         KeyRange range = new KeyRange().setStart_token(startToken).setEnd_token(endToken);
-        conf.set(INPUT_KEYRANGE_CONFIG, keyRangeToString(range));
+        conf.set(INPUT_KEYRANGE_CONFIG, thriftToString(range));
+    }
+
+    /**
+     * Set the KeyRange to limit the rows.
+     * @param conf Job configuration you are about to run
+     */
+    public static void setInputRange(Configuration conf, String startToken, String endToken, List<IndexExpression> filter)
+    {
+        KeyRange range = new KeyRange().setStart_token(startToken).setEnd_token(endToken).setRow_filter(filter);
+        conf.set(INPUT_KEYRANGE_CONFIG, thriftToString(range));
+    }
+
+    /**
+     * Set the KeyRange to limit the rows.
+     * @param conf Job configuration you are about to run
+     */
+    public static void setInputRange(Configuration conf, List<IndexExpression> filter)
+    {
+        KeyRange range = new KeyRange().setRow_filter(filter);
+        conf.set(INPUT_KEYRANGE_CONFIG, thriftToString(range));
     }
 
     /** may be null if unset */
@@ -227,20 +264,6 @@ public class ConfigHelper
     {
         String str = conf.get(INPUT_KEYRANGE_CONFIG);
         return null != str ? keyRangeFromString(str) : null;
-    }
-
-    private static String keyRangeToString(KeyRange keyRange)
-    {
-        assert keyRange != null;
-        TSerializer serializer = new TSerializer(new TBinaryProtocol.Factory());
-        try
-        {
-            return Hex.bytesToHex(serializer.serialize(keyRange));
-        }
-        catch (TException e)
-        {
-            throw new RuntimeException(e);
-        }
     }
 
     private static KeyRange keyRangeFromString(String st)
@@ -263,27 +286,37 @@ public class ConfigHelper
     {
         return conf.get(INPUT_KEYSPACE_CONFIG);
     }
-    
+
     public static String getOutputKeyspace(Configuration conf)
     {
         return conf.get(OUTPUT_KEYSPACE_CONFIG);
     }
-    
+
     public static String getInputKeyspaceUserName(Configuration conf)
     {
     	return conf.get(INPUT_KEYSPACE_USERNAME_CONFIG);
     }
-    
+
     public static String getInputKeyspacePassword(Configuration conf)
     {
     	return conf.get(INPUT_KEYSPACE_PASSWD_CONFIG);
+    }
+
+    public static void setOutputKeyspaceUserName(Configuration conf, String username)
+    {
+        conf.set(OUTPUT_KEYSPACE_USERNAME_CONFIG, username);
     }
 
     public static String getOutputKeyspaceUserName(Configuration conf)
     {
     	return conf.get(OUTPUT_KEYSPACE_USERNAME_CONFIG);
     }
-    
+
+    public static void setOutputKeyspacePassword(Configuration conf, String password)
+    {
+        conf.set(OUTPUT_KEYSPACE_PASSWD_CONFIG, password);
+    }
+
     public static String getOutputKeyspacePassword(Configuration conf)
     {
     	return conf.get(OUTPUT_KEYSPACE_PASSWD_CONFIG);
@@ -293,7 +326,12 @@ public class ConfigHelper
     {
         return conf.get(INPUT_COLUMNFAMILY_CONFIG);
     }
-    
+
+    public static boolean getInputIsWide(Configuration conf)
+    {
+        return Boolean.valueOf(conf.get(INPUT_WIDEROWS_CONFIG));
+    }
+
     public static String getOutputColumnFamily(Configuration conf)
     {
         return conf.get(OUTPUT_COLUMNFAMILY_CONFIG);
@@ -309,54 +347,135 @@ public class ConfigHelper
         return conf.get(WRITE_CONSISTENCY_LEVEL, "ONE");
     }
 
-    public static int getRpcPort(Configuration conf)
+    public static int getInputRpcPort(Configuration conf)
     {
-        return Integer.parseInt(conf.get(THRIFT_PORT));
+        return Integer.parseInt(conf.get(INPUT_THRIFT_PORT, "9160"));
     }
 
-    public static void setRpcPort(Configuration conf, String port)
+    public static void setInputRpcPort(Configuration conf, String port)
     {
-        conf.set(THRIFT_PORT, port);
+        conf.set(INPUT_THRIFT_PORT, port);
     }
 
-    public static String getInitialAddress(Configuration conf)
+    public static String getInputInitialAddress(Configuration conf)
     {
-        return conf.get(INITIAL_THRIFT_ADDRESS);
+        return conf.get(INPUT_INITIAL_THRIFT_ADDRESS);
     }
 
-    public static void setInitialAddress(Configuration conf, String address)
+    public static void setInputInitialAddress(Configuration conf, String address)
     {
-        conf.set(INITIAL_THRIFT_ADDRESS, address);
+        conf.set(INPUT_INITIAL_THRIFT_ADDRESS, address);
     }
 
-    public static void setPartitioner(Configuration conf, String classname)
+    public static void setInputPartitioner(Configuration conf, String classname)
     {
-        conf.set(PARTITIONER_CONFIG, classname); 
+        conf.set(INPUT_PARTITIONER_CONFIG, classname);
     }
 
-    public static IPartitioner getPartitioner(Configuration conf)
+    public static IPartitioner getInputPartitioner(Configuration conf)
     {
         try
         {
-            return FBUtilities.newPartitioner(conf.get(PARTITIONER_CONFIG)); 
+            return FBUtilities.newPartitioner(conf.get(INPUT_PARTITIONER_CONFIG));
         }
         catch (ConfigurationException e)
         {
             throw new RuntimeException(e);
         }
     }
-    
 
-    public static Cassandra.Client getClientFromAddressList(Configuration conf) throws IOException
+    public static int getOutputRpcPort(Configuration conf)
     {
-        String[] addresses = ConfigHelper.getInitialAddress(conf).split(",");
+        return Integer.parseInt(conf.get(OUTPUT_THRIFT_PORT, "9160"));
+    }
+
+    public static void setOutputRpcPort(Configuration conf, String port)
+    {
+        conf.set(OUTPUT_THRIFT_PORT, port);
+    }
+
+    public static String getOutputInitialAddress(Configuration conf)
+    {
+        return conf.get(OUTPUT_INITIAL_THRIFT_ADDRESS);
+    }
+
+    public static void setOutputInitialAddress(Configuration conf, String address)
+    {
+        conf.set(OUTPUT_INITIAL_THRIFT_ADDRESS, address);
+    }
+
+    public static void setOutputPartitioner(Configuration conf, String classname)
+    {
+        conf.set(OUTPUT_PARTITIONER_CONFIG, classname);
+    }
+
+    public static IPartitioner getOutputPartitioner(Configuration conf)
+    {
+        try
+        {
+            return FBUtilities.newPartitioner(conf.get(OUTPUT_PARTITIONER_CONFIG));
+        }
+        catch (ConfigurationException e)
+        {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public static String getOutputCompressionClass(Configuration conf)
+    {
+        return conf.get(OUTPUT_COMPRESSION_CLASS);
+    }
+
+    public static String getOutputCompressionChunkLength(Configuration conf)
+    {
+        return conf.get(OUTPUT_COMPRESSION_CHUNK_LENGTH, String.valueOf(CompressionParameters.DEFAULT_CHUNK_LENGTH));
+    }
+
+    public static void setOutputCompressionClass(Configuration conf, String classname)
+    {
+        conf.set(OUTPUT_COMPRESSION_CLASS, classname);
+    }
+
+    public static void setOutputCompressionChunkLength(Configuration conf, String length)
+    {
+        conf.set(OUTPUT_COMPRESSION_CHUNK_LENGTH, length);
+    }
+
+    public static CompressionParameters getOutputCompressionParamaters(Configuration conf)
+    {
+        if (getOutputCompressionClass(conf) == null)
+            return new CompressionParameters(null);
+
+        Map<String, String> options = new HashMap<String, String>();
+        options.put(CompressionParameters.SSTABLE_COMPRESSION, getOutputCompressionClass(conf));
+        options.put(CompressionParameters.CHUNK_LENGTH_KB, getOutputCompressionChunkLength(conf));
+
+        try {
+            return CompressionParameters.create(options);
+        } catch (ConfigurationException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public static Cassandra.Client getClientFromInputAddressList(Configuration conf) throws IOException
+    {
+        return getClientFromAddressList(conf, ConfigHelper.getInputInitialAddress(conf).split(","), ConfigHelper.getInputRpcPort(conf));
+    }
+
+        public static Cassandra.Client getClientFromOutputAddressList(Configuration conf) throws IOException
+    {
+        return getClientFromAddressList(conf, ConfigHelper.getOutputInitialAddress(conf).split(","), ConfigHelper.getOutputRpcPort(conf));
+    }
+
+    private static Cassandra.Client getClientFromAddressList(Configuration conf, String[] addresses, int port) throws IOException
+    {
         Cassandra.Client client = null;
         List<IOException> exceptions = new ArrayList<IOException>();
         for (String address : addresses)
         {
             try
             {
-                client = createConnection(address, ConfigHelper.getRpcPort(conf), true);
+                client = createConnection(address, port, true);
                 break;
             }
             catch (IOException ioe)

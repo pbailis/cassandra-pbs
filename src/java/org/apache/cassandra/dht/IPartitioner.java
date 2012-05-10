@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.dht;
 
 import java.nio.ByteBuffer;
@@ -30,18 +29,18 @@ public interface IPartitioner<T extends Token>
      * @deprecated Used by SSTables before version 'e'.
      *
      * Convert the on disk representation to a DecoratedKey object
-     * @param key On disk representation 
+     * @param key On disk representation
      * @return DecoratedKey object
      */
-    public DecoratedKey<T> convertFromDiskFormat(ByteBuffer key);
-    
+    public DecoratedKey convertFromDiskFormat(ByteBuffer key);
+
     /**
      * Transform key to object representation of the on-disk format.
      *
      * @param key the raw, client-facing key
      * @return decorated version of key
      */
-    public DecoratedKey<T> decorateKey(ByteBuffer key);
+    public DecoratedKey decorateKey(ByteBuffer key);
 
     /**
      * Calculate a Token representing the approximate "middle" of the given
@@ -51,10 +50,10 @@ public interface IPartitioner<T extends Token>
      */
     public Token midpoint(Token left, Token right);
 
-	/**
-	 * @return The minimum possible Token in the range that is being partitioned.
-	 */
-	public T getMinimumToken();
+    /**
+     * @return The minimum possible Token in the range that is being partitioned.
+     */
+    public T getMinimumToken();
 
     /**
      * @return a Token that can be used to route a given key
@@ -69,7 +68,7 @@ public interface IPartitioner<T extends Token>
     public T getRandomToken();
 
     public Token.TokenFactory getTokenFactory();
-    
+
     /**
      * @return True if the implementing class preserves key order in the Tokens
      * it generates.

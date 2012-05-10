@@ -20,16 +20,18 @@ package org.apache.cassandra.io.sstable;
 
 import java.io.File;
 
+import org.apache.cassandra.dht.IPartitioner;
 import org.junit.Test;
 
-import org.apache.cassandra.CleanupHelper;
+import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.Util;
 import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.marshal.IntegerType;
+import org.apache.cassandra.service.StorageService;
 import static org.apache.cassandra.utils.ByteBufferUtil.bytes;
 import static org.apache.cassandra.utils.ByteBufferUtil.toInt;
 
-public class SSTableSimpleWriterTest extends CleanupHelper
+public class SSTableSimpleWriterTest extends SchemaLoader
 {
     @Test
     public void testSSTableSimpleUnsortedWriter() throws Exception
@@ -37,15 +39,15 @@ public class SSTableSimpleWriterTest extends CleanupHelper
         final int INC = 5;
         final int NBCOL = 10;
 
-
         String tablename = "Keyspace1";
         String cfname = "StandardInteger1";
 
         Table t = Table.open(tablename); // make sure we create the directory
-        File dir = new File(t.getDataFileLocation(0));
+        File dir = Directories.create(tablename, cfname).getDirectoryForNewSSTables(0);
         assert dir.exists();
 
-        SSTableSimpleUnsortedWriter writer = new SSTableSimpleUnsortedWriter(dir, tablename, cfname, IntegerType.instance, null, 16);
+        IPartitioner partitioner = StorageService.getPartitioner();
+        SSTableSimpleUnsortedWriter writer = new SSTableSimpleUnsortedWriter(dir, partitioner, tablename, cfname, IntegerType.instance, null, 16);
 
         int k = 0;
 

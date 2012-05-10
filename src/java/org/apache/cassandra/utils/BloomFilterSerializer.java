@@ -1,6 +1,4 @@
-package org.apache.cassandra.utils;
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,28 +6,26 @@ package org.apache.cassandra.utils;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-
+package org.apache.cassandra.utils;
 
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
 
-import org.apache.cassandra.db.DBConstants;
+import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.io.ISerializer;
 import org.apache.cassandra.utils.obs.OpenBitSet;
 
-public class BloomFilterSerializer implements ISerializer<BloomFilter>
+abstract class BloomFilterSerializer implements ISerializer<BloomFilter>
 {
     public void serialize(BloomFilter bf, DataOutput dos) throws IOException
     {
@@ -63,8 +59,10 @@ public class BloomFilterSerializer implements ISerializer<BloomFilter>
                 bits[i] = dis.readLong();
         }
 
-        return new BloomFilter(hashes, bs);
+        return createFilter(hashes, bs);
     }
+
+    protected abstract BloomFilter createFilter(int hashes, OpenBitSet bs);
 
     /**
      * Calculates a serialized size of the given Bloom Filter
@@ -74,10 +72,22 @@ public class BloomFilterSerializer implements ISerializer<BloomFilter>
      *
      * @return serialized size of the given bloom filter
      */
-    public long serializedSize(BloomFilter bf)
+    public long serializedSize(BloomFilter bf, TypeSizes typeSizes)
     {
-        return DBConstants.intSize // hash count
-               + DBConstants.intSize // length
-               + bf.bitset.getNumWords() * DBConstants.longSize; // buckets
+        int bitLength = bf.bitset.getNumWords();
+        int pageSize = bf.bitset.getPageSize();
+        int pageCount = bf.bitset.getPageCount();
+
+        int size = 0;
+        size += typeSizes.sizeof(bf.getHashCount()); // hash count
+        size += typeSizes.sizeof(bitLength); // length
+
+        for (int p = 0; p < pageCount; p++)
+        {
+            long[] bits = bf.bitset.getPage(p);
+            for (int i = 0; i < pageSize && bitLength-- > 0; i++)
+                size += typeSizes.sizeof(bits[i]); // bucket
+        }
+        return size;
     }
 }

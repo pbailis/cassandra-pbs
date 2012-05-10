@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,10 +15,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.service;
 
-import java.io.IOError;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
@@ -33,9 +31,9 @@ import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.columniterator.IdentityQueryFilter;
 import org.apache.cassandra.db.filter.QueryFilter;
 import org.apache.cassandra.db.filter.QueryPath;
-import org.apache.cassandra.gms.Gossiper;
 import org.apache.cassandra.net.IAsyncResult;
-import org.apache.cassandra.net.Message;
+import org.apache.cassandra.net.MessageIn;
+import org.apache.cassandra.net.MessageOut;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.utils.CloseableIterator;
 import org.apache.cassandra.utils.FBUtilities;
@@ -69,14 +67,13 @@ public class RowRepairResolver extends AbstractRowResolver
             List<ColumnFamily> versions = new ArrayList<ColumnFamily>(replies.size());
             List<InetAddress> endpoints = new ArrayList<InetAddress>(replies.size());
 
-            for (Map.Entry<Message, ReadResponse> entry : replies.entrySet())
+            for (MessageIn<ReadResponse> message : replies)
             {
-                Message message = entry.getKey();
-                ReadResponse response = entry.getValue();
+                ReadResponse response = message.payload;
                 ColumnFamily cf = response.row().cf;
-                assert !response.isDigestQuery() : "Received digest response to repair read from " + entry.getKey().getFrom();
+                assert !response.isDigestQuery() : "Received digest response to repair read from " + message.from;
                 versions.add(cf);
-                endpoints.add(message.getFrom());
+                endpoints.add(message.from);
 
                 // compute maxLiveColumns to prevent short reads -- see https://issues.apache.org/jira/browse/CASSANDRA-2643
                 int liveColumns = cf == null ? 0 : cf.getLiveColumnCount();
@@ -95,7 +92,7 @@ public class RowRepairResolver extends AbstractRowResolver
         }
         else
         {
-            resolved = replies.values().iterator().next().row().cf;
+            resolved = replies.iterator().next().payload.row().cf;
         }
 
         if (logger.isDebugEnabled())
@@ -108,7 +105,7 @@ public class RowRepairResolver extends AbstractRowResolver
      * For each row version, compare with resolved (the superset of all row versions);
      * if it is missing anything, send a mutation to the endpoint it come from.
      */
-    public static List<IAsyncResult> scheduleRepairs(ColumnFamily resolved, String table, DecoratedKey<?> key, List<ColumnFamily> versions, List<InetAddress> endpoints)
+    public static List<IAsyncResult> scheduleRepairs(ColumnFamily resolved, String table, DecoratedKey key, List<ColumnFamily> versions, List<InetAddress> endpoints)
     {
         List<IAsyncResult> results = new ArrayList<IAsyncResult>(versions.size());
 
@@ -121,18 +118,10 @@ public class RowRepairResolver extends AbstractRowResolver
             // create and send the row mutation message based on the diff
             RowMutation rowMutation = new RowMutation(table, key.key);
             rowMutation.add(diffCf);
-            Message repairMessage;
-            try
-            {
-                // use a separate verb here because we don't want these to be get the white glove hint-
-                // on-timeout behavior that a "real" mutation gets
-                repairMessage = rowMutation.getMessage(StorageService.Verb.READ_REPAIR,
-                                                       Gossiper.instance.getVersion(endpoints.get(i)));
-            }
-            catch (IOException e)
-            {
-                throw new IOError(e);
-            }
+            MessageOut repairMessage;
+            // use a separate verb here because we don't want these to be get the white glove hint-
+            // on-timeout behavior that a "real" mutation gets
+            repairMessage = rowMutation.createMessage(MessagingService.Verb.READ_REPAIR);
             results.add(MessagingService.instance().sendRR(repairMessage, endpoints.get(i)));
         }
 
@@ -178,7 +167,7 @@ public class RowRepairResolver extends AbstractRowResolver
     }
 
     public boolean isDataPresent()
-	{
+    {
         throw new UnsupportedOperationException();
     }
 

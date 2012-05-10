@@ -28,6 +28,7 @@ import org.apache.thrift.transport.TFramedTransport;
 import org.apache.thrift.transport.TSocket;
 import org.apache.thrift.transport.TTransport;
 import org.apache.thrift.transport.TTransportException;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,7 +36,7 @@ public class WordCountSetup
 {
     private static final Logger logger = LoggerFactory.getLogger(WordCountSetup.class);
 
-    public static final int TEST_COUNT = 4;
+    public static final int TEST_COUNT = 6;
 
     public static void main(String[] args) throws Exception
     {
@@ -45,7 +46,7 @@ public class WordCountSetup
 
         client.set_keyspace(WordCount.KEYSPACE);
 
-        Map<ByteBuffer, Map<String,List<Mutation>>> mutationMap;
+        Map<ByteBuffer, Map<String, List<Mutation>>> mutationMap;
         Column c;
 
         // text0: no rows
@@ -69,8 +70,8 @@ public class WordCountSetup
         logger.info("added text2");
 
         // text3: 1000 rows, 1 word
-        mutationMap = new HashMap<ByteBuffer,Map<String,List<Mutation>>>();
-        for (int i=0; i<1000; i++)
+        mutationMap = new HashMap<ByteBuffer, Map<String, List<Mutation>>>();
+        for (int i = 0; i < 1000; i++)
         {
             c = new Column()
                 .setName(ByteBufferUtil.bytes("text3"))
@@ -81,6 +82,25 @@ public class WordCountSetup
         client.batch_mutate(mutationMap, ConsistencyLevel.ONE);
         logger.info("added text3");
 
+        // text4: 1000 rows, 1 word, one column to filter on
+        mutationMap = new HashMap<ByteBuffer, Map<String, List<Mutation>>>();
+        for (int i = 0; i < 1000; i++)
+        {
+            Column c1 = new Column()
+                       .setName(ByteBufferUtil.bytes("text4"))
+                       .setValue(ByteBufferUtil.bytes("word1"))
+                       .setTimestamp(System.currentTimeMillis());
+            Column c2 = new Column()
+                       .setName(ByteBufferUtil.bytes("int4"))
+                       .setValue(ByteBufferUtil.bytes(i % 4))
+                       .setTimestamp(System.currentTimeMillis());
+            ByteBuffer key = ByteBufferUtil.bytes("key" + i);
+            addToMutationMap(mutationMap, key, WordCount.COLUMN_FAMILY, c1);
+            addToMutationMap(mutationMap, key, WordCount.COLUMN_FAMILY, c2);
+        }
+        client.batch_mutate(mutationMap, ConsistencyLevel.ONE);
+        logger.info("added text4");
+
         // sentence data for the counters
         final ByteBuffer key = ByteBufferUtil.bytes("key-if-verse1");
         final ColumnParent colParent = new ColumnParent(WordCountCounters.COUNTER_COLUMN_FAMILY);
@@ -89,45 +109,62 @@ public class WordCountSetup
             client.add(key,
                        colParent,
                        new CounterColumn(ByteBufferUtil.bytes(sentence),
-                       (long)sentence.split("\\s").length),
-                       ConsistencyLevel.ONE );
+                                         (long) sentence.split("\\s").length),
+                       ConsistencyLevel.ONE);
         }
         logger.info("added key-if-verse1");
 
         System.exit(0);
     }
 
-    private static Map<ByteBuffer,Map<String,List<Mutation>>> getMutationMap(ByteBuffer key, String cf, Column c)
+    private static Map<ByteBuffer, Map<String, List<Mutation>>> getMutationMap(ByteBuffer key, String cf, Column c)
     {
-        Map<ByteBuffer,Map<String,List<Mutation>>> mutationMap = new HashMap<ByteBuffer,Map<String,List<Mutation>>>();
+        Map<ByteBuffer, Map<String, List<Mutation>>> mutationMap = new HashMap<ByteBuffer, Map<String, List<Mutation>>>();
         addToMutationMap(mutationMap, key, cf, c);
         return mutationMap;
     }
 
-    private static void addToMutationMap(Map<ByteBuffer,Map<String,List<Mutation>>> mutationMap, ByteBuffer key, String cf, Column c)
+    private static void addToMutationMap(Map<ByteBuffer, Map<String, List<Mutation>>> mutationMap, ByteBuffer key, String cf, Column c)
     {
-        Map<String,List<Mutation>> cfMutation = new HashMap<String,List<Mutation>>();
-        List<Mutation> mList = new ArrayList<Mutation>();
+        Map<String, List<Mutation>> cfMutation = mutationMap.get(key);
+        if (cfMutation == null)
+        {
+            cfMutation = new HashMap<String, List<Mutation>>();
+            mutationMap.put(key, cfMutation);
+        }
+
+        List<Mutation> mutationList = cfMutation.get(cf);
+        if (mutationList == null)
+        {
+            mutationList = new ArrayList<Mutation>();
+            cfMutation.put(cf, mutationList);
+        }
+
         ColumnOrSuperColumn cc = new ColumnOrSuperColumn();
         Mutation m = new Mutation();
 
         cc.setColumn(c);
         m.setColumn_or_supercolumn(cc);
-        mList.add(m);
-        cfMutation.put(cf, mList);
-        mutationMap.put(key, cfMutation);
+        mutationList.add(m);
     }
 
-    private static void setupKeyspace(Cassandra.Iface client) throws TException, InvalidRequestException, SchemaDisagreementException {
+    private static void setupKeyspace(Cassandra.Iface client) throws TException, InvalidRequestException, SchemaDisagreementException
+    {
         List<CfDef> cfDefList = new ArrayList<CfDef>();
         CfDef input = new CfDef(WordCount.KEYSPACE, WordCount.COLUMN_FAMILY);
         input.setComparator_type("AsciiType");
-        input.setDefault_validation_class("AsciiType");
+        input.setColumn_metadata(Arrays.asList(new ColumnDef(ByteBufferUtil.bytes("text1"), "AsciiType"),
+                                               new ColumnDef(ByteBufferUtil.bytes("text2"), "AsciiType"),
+                                               new ColumnDef(ByteBufferUtil.bytes("text3"), "AsciiType"),
+                                               new ColumnDef(ByteBufferUtil.bytes("text4"), "AsciiType"),
+                                               new ColumnDef(ByteBufferUtil.bytes("int4"), "Int32Type").setIndex_name("int4idx").setIndex_type(IndexType.KEYS)));
         cfDefList.add(input);
+
         CfDef output = new CfDef(WordCount.KEYSPACE, WordCount.OUTPUT_COLUMN_FAMILY);
         output.setComparator_type("AsciiType");
-        output.setDefault_validation_class("AsciiType");
+        output.setDefault_validation_class("Int32Type");
         cfDefList.add(output);
+
         CfDef counterInput = new CfDef(WordCount.KEYSPACE, WordCountCounters.COUNTER_COLUMN_FAMILY);
         counterInput.setComparator_type("UTF8Type");
         counterInput.setDefault_validation_class("CounterColumnType");
@@ -151,11 +188,11 @@ public class WordCountSetup
     {
         if (System.getProperty("cassandra.host") == null || System.getProperty("cassandra.port") == null)
         {
-           logger.warn("cassandra.host or cassandra.port is not defined, using default");
+            logger.warn("cassandra.host or cassandra.port is not defined, using default");
         }
-        return createConnection( System.getProperty("cassandra.host","localhost"),
-                                 Integer.valueOf(System.getProperty("cassandra.port","9160")),
-                                 Boolean.valueOf(System.getProperty("cassandra.framed", "true")) );
+        return createConnection(System.getProperty("cassandra.host", "localhost"),
+                                Integer.valueOf(System.getProperty("cassandra.port", "9160")),
+                                Boolean.valueOf(System.getProperty("cassandra.framed", "true")));
     }
 
     private static Cassandra.Client createConnection(String host, Integer port, boolean framed) throws TTransportException
@@ -171,14 +208,14 @@ public class WordCountSetup
     private static String[] sentenceData()
     {   // Public domain context, source http://en.wikisource.org/wiki/If%E2%80%94
         return new String[]{
-            "If you can keep your head when all about you",
-            "Are losing theirs and blaming it on you",
-            "If you can trust yourself when all men doubt you,",
-            "But make allowance for their doubting too:",
-            "If you can wait and not be tired by waiting,",
-            "Or being lied about, don’t deal in lies,",
-            "Or being hated, don’t give way to hating,",
-            "And yet don’t look too good, nor talk too wise;"
+                "If you can keep your head when all about you",
+                "Are losing theirs and blaming it on you",
+                "If you can trust yourself when all men doubt you,",
+                "But make allowance for their doubting too:",
+                "If you can wait and not be tired by waiting,",
+                "Or being lied about, don’t deal in lies,",
+                "Or being hated, don’t give way to hating,",
+                "And yet don’t look too good, nor talk too wise;"
         };
     }
 }

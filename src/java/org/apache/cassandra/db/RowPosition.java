@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -43,11 +43,7 @@ public abstract class RowPosition implements RingPosition<RowPosition>
         }
     }
 
-    private static final RowPositionSerializer serializer = new RowPositionSerializer();
-    public static RowPositionSerializer serializer()
-    {
-        return serializer;
-    }
+    public static final RowPositionSerializer serializer = new RowPositionSerializer();
 
     public static RowPosition forKey(ByteBuffer key, IPartitioner p)
     {
@@ -82,7 +78,7 @@ public abstract class RowPosition implements RingPosition<RowPosition>
             if (kind == Kind.ROW_KEY)
                 ByteBufferUtil.writeWithShortLength(((DecoratedKey)pos).key, dos);
             else
-                Token.serializer().serialize(pos.getToken(), dos);
+                Token.serializer.serialize(pos.getToken(), dos);
         }
 
         public RowPosition deserialize(DataInput dis) throws IOException
@@ -95,17 +91,25 @@ public abstract class RowPosition implements RingPosition<RowPosition>
             }
             else
             {
-                Token t = Token.serializer().deserialize(dis);
+                Token t = Token.serializer.deserialize(dis);
                 return kind == Kind.MIN_BOUND ? t.minKeyBound() : t.maxKeyBound();
             }
         }
 
-        public long serializedSize(RowPosition pos)
+        public long serializedSize(RowPosition pos, TypeSizes typeSizes)
         {
             Kind kind = pos.kind();
-            return DBConstants.boolSize
-                + (kind == Kind.ROW_KEY ? DBConstants.shortSize + ((DecoratedKey)pos).key.remaining()
-                                        : Token.serializer().serializedSize(pos.getToken()));
+            int size = 1; // 1 byte for enum
+            if (kind == Kind.ROW_KEY)
+            {
+                int keySize = ((DecoratedKey)pos).key.remaining();
+                size += (typeSizes.sizeof((short) keySize) + keySize);
+            }
+            else
+            {
+                Token.serializer.serializedSize(pos.getToken(), typeSizes);
+            }
+            return size;
         }
     }
 }

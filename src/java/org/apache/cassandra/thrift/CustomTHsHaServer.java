@@ -1,6 +1,4 @@
-package org.apache.cassandra.thrift;
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,18 +6,16 @@ package org.apache.cassandra.thrift;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-
+package org.apache.cassandra.thrift;
 
 import java.io.IOException;
 import java.nio.channels.SelectionKey;
@@ -42,7 +38,7 @@ import org.slf4j.LoggerFactory;
 
 /**
  * This is a interim solution till THRIFT-1167 gets committed...
- * 
+ *
  * The idea here is to avoid sticking to one CPU for IO's. For better throughput
  * it is spread across multiple threads. Number of selector thread can be the
  * number of CPU available.
@@ -50,9 +46,9 @@ import org.slf4j.LoggerFactory;
 public class CustomTHsHaServer extends TNonblockingServer
 {
     private static final Logger LOGGER = LoggerFactory.getLogger(CustomTHsHaServer.class.getName());
-    private Set<SelectorThread> ioThreads = new HashSet<SelectorThread>();
-    private volatile boolean stopped_ = true;
-    private ExecutorService invoker;
+    private final Set<SelectorThread> ioThreads = new HashSet<SelectorThread>();
+    private volatile boolean stopped = true;
+    private final ExecutorService invoker;
 
     /**
      * All the arguments to Non Blocking Server will apply here. In addition,
@@ -90,7 +86,7 @@ public class CustomTHsHaServer extends TNonblockingServer
     protected class Invocation implements Runnable
     {
         private final FrameBuffer frameBuffer;
-        private SelectorThread thread;
+        private final SelectorThread thread;
 
         public Invocation(final FrameBuffer frameBuffer, SelectorThread thread)
         {
@@ -110,7 +106,7 @@ public class CustomTHsHaServer extends TNonblockingServer
 
     protected boolean startThreads()
     {
-        stopped_ = false;
+        stopped = false;
         // start all the threads.
         for (SelectorThread thread : ioThreads)
             thread.start();
@@ -125,7 +121,7 @@ public class CustomTHsHaServer extends TNonblockingServer
             // wait till all done with stuff's
             for (SelectorThread thread : ioThreads)
                 thread.join();
-        } 
+        }
         catch (InterruptedException e)
         {
             LOGGER.error("Interrupted while joining threads!", e);
@@ -139,7 +135,7 @@ public class CustomTHsHaServer extends TNonblockingServer
     public void stop()
     {
         stopListening();
-        stopped_ = true;
+        stopped = true;
         for (SelectorThread thread : ioThreads)
             thread.wakeupSelector();
         joinSelector();
@@ -151,8 +147,8 @@ public class CustomTHsHaServer extends TNonblockingServer
     protected class SelectorThread extends Thread
     {
         private final Selector selector;
-        private TNonblockingServerTransport serverTransport;
-        private Set<FrameBuffer> selectInterestChanges = new HashSet<FrameBuffer>();
+        private final TNonblockingServerTransport serverTransport;
+        private final Set<FrameBuffer> selectInterestChanges = new HashSet<FrameBuffer>();
 
         public SelectorThread(String name)
         {
@@ -162,7 +158,7 @@ public class CustomTHsHaServer extends TNonblockingServer
                 this.selector = SelectorProvider.provider().openSelector();
                 this.serverTransport = (TNonblockingServerTransport) serverTransport_;
                 this.serverTransport.registerSelector(selector);
-            } 
+            }
             catch (IOException ex)
             {
                 throw new RuntimeException("Couldnt open the NIO selector", ex);
@@ -173,11 +169,19 @@ public class CustomTHsHaServer extends TNonblockingServer
         {
             try
             {
-                while (!stopped_)
+                while (!stopped)
                 {
                     select();
                 }
-            } 
+                try
+                {
+                    selector.close(); // CASSANDRA-3867
+                }
+                catch (IOException e)
+                {
+                    // ignore this exception.
+                }
+            }
             catch (Throwable t)
             {
                 LOGGER.error("Uncaught Exception: ", t);
@@ -212,7 +216,7 @@ public class CustomTHsHaServer extends TNonblockingServer
             // process the changes which are inserted after completion.
             processInterestChanges();
         }
-        
+
         private void handleAccept()
         {
             SelectionKey clientKey = null;
@@ -224,7 +228,7 @@ public class CustomTHsHaServer extends TNonblockingServer
                 clientKey = client.registerSelector(selector, SelectionKey.OP_READ);
                 // add this key to the map
                 FrameBuffer frameBuffer = new FrameBuffer(client, clientKey);
-                clientKey.attach(frameBuffer); 
+                clientKey.attach(frameBuffer);
             } catch (TTransportException ex)
             {
                 // ignore this might have been handled by the other threads.
@@ -242,7 +246,7 @@ public class CustomTHsHaServer extends TNonblockingServer
                     client.close();
             }
         }
-        
+
         private void handleRead(SelectionKey key)
         {
             FrameBuffer buffer = (FrameBuffer) key.attachment();
@@ -258,14 +262,14 @@ public class CustomTHsHaServer extends TNonblockingServer
                     cleanupSelectionkey(key);
             }
         }
-        
+
         private void handleWrite(SelectionKey key)
         {
             FrameBuffer buffer = (FrameBuffer) key.attachment();
             if (!buffer.write())
                 cleanupSelectionkey(key);
         }
-        
+
         public void requestSelectInterestChange(FrameBuffer frameBuffer)
         {
             synchronized (selectInterestChanges)
@@ -285,7 +289,7 @@ public class CustomTHsHaServer extends TNonblockingServer
                 selectInterestChanges.clear();
             }
         }
-        
+
         private void cleanupSelectionkey(SelectionKey key)
         {
             FrameBuffer buffer = (FrameBuffer) key.attachment();
@@ -294,13 +298,13 @@ public class CustomTHsHaServer extends TNonblockingServer
             // cancel the selection key
             key.cancel();
         }
-        
+
         public void wakeupSelector()
         {
             selector.wakeup();
         }
     }
-    
+
     protected boolean requestInvoke(FrameBuffer frameBuffer, SelectorThread thread)
     {
         try
@@ -308,7 +312,7 @@ public class CustomTHsHaServer extends TNonblockingServer
             Runnable invocation = new Invocation(frameBuffer, thread);
             invoker.execute(invocation);
             return true;
-        } 
+        }
         catch (RejectedExecutionException rx)
         {
             LOGGER.warn("ExecutorService rejected execution!", rx);

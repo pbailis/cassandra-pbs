@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.service;
 
 import java.nio.ByteBuffer;
@@ -26,7 +25,7 @@ import org.apache.cassandra.utils.ByteBufferUtil;
 @SuppressWarnings("serial")
 public class DigestMismatchException extends Exception
 {
-    public DigestMismatchException(DecoratedKey<?> key, ByteBuffer digest1, ByteBuffer digest2)
+    public DigestMismatchException(DecoratedKey key, ByteBuffer digest1, ByteBuffer digest2)
     {
         super(String.format("Mismatch for key %s (%s vs %s)",
                             key.toString(),

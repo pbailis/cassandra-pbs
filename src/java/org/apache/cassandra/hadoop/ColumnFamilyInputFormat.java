@@ -1,6 +1,4 @@
-package org.apache.cassandra.hadoop;
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -9,17 +7,15 @@ package org.apache.cassandra.hadoop;
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-
+package org.apache.cassandra.hadoop;
 
 import java.io.IOException;
 import java.net.InetAddress;
@@ -28,12 +24,13 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Random;
-import java.util.Set;
 import java.util.SortedMap;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+
+import com.google.common.collect.ImmutableList;
 
 import org.apache.cassandra.db.IColumn;
 import org.apache.cassandra.dht.IPartitioner;
@@ -46,7 +43,6 @@ import org.apache.cassandra.thrift.TokenRange;
 import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.mapred.*;
-import org.apache.hadoop.mapreduce.*;
 import org.apache.hadoop.mapreduce.InputFormat;
 import org.apache.hadoop.mapreduce.InputSplit;
 import org.apache.hadoop.mapreduce.JobContext;
@@ -89,6 +85,7 @@ public class ColumnFamilyInputFormat extends InputFormat<ByteBuffer, SortedMap<B
 
     private String keyspace;
     private String cfName;
+    private IPartitioner partitioner;
 
     private static void validateConfiguration(Configuration conf)
     {
@@ -100,6 +97,10 @@ public class ColumnFamilyInputFormat extends InputFormat<ByteBuffer, SortedMap<B
         {
             throw new UnsupportedOperationException("you must set the predicate with setPredicate");
         }
+        if (ConfigHelper.getInputInitialAddress(conf) == null)
+            throw new UnsupportedOperationException("You must set the initial output address to a Cassandra node");
+        if (ConfigHelper.getInputPartitioner(conf) == null)
+            throw new UnsupportedOperationException("You must set the Cassandra partitioner class");
     }
 
     public List<InputSplit> getSplits(JobContext context) throws IOException
@@ -113,6 +114,8 @@ public class ColumnFamilyInputFormat extends InputFormat<ByteBuffer, SortedMap<B
 
         keyspace = ConfigHelper.getInputKeyspace(context.getConfiguration());
         cfName = ConfigHelper.getInputColumnFamily(context.getConfiguration());
+        partitioner = ConfigHelper.getInputPartitioner(context.getConfiguration());
+        logger.debug("partitioner is " + partitioner);
 
         // cannonical ranges, split into pieces, fetching the splits in parallel
         ExecutorService executor = Executors.newCachedThreadPool();
@@ -122,11 +125,9 @@ public class ColumnFamilyInputFormat extends InputFormat<ByteBuffer, SortedMap<B
         {
             List<Future<List<InputSplit>>> splitfutures = new ArrayList<Future<List<InputSplit>>>();
             KeyRange jobKeyRange = ConfigHelper.getInputKeyRange(conf);
-            IPartitioner partitioner = null;
             Range<Token> jobRange = null;
-            if (jobKeyRange != null)
+            if (jobKeyRange != null && jobKeyRange.start_token != null)
             {
-                partitioner = ConfigHelper.getPartitioner(context.getConfiguration());
                 assert partitioner.preservesOrder() : "ConfigHelper.setInputKeyRange(..) can only be used with a order preserving paritioner";
                 assert jobKeyRange.start_key == null : "only start_token supported";
                 assert jobKeyRange.end_key == null : "only end_token supported";
@@ -212,16 +213,24 @@ public class ColumnFamilyInputFormat extends InputFormat<ByteBuffer, SortedMap<B
             for (String endpoint: range.rpc_endpoints)
             {
                 String endpoint_address = endpoint;
-		        if (endpoint_address == null || endpoint_address.equals("0.0.0.0"))
-			        endpoint_address = range.endpoints.get(endpointIndex);
-		        endpoints[endpointIndex++] = InetAddress.getByName(endpoint_address).getHostName();
+                if (endpoint_address == null || endpoint_address.equals("0.0.0.0"))
+                    endpoint_address = range.endpoints.get(endpointIndex);
+                endpoints[endpointIndex++] = InetAddress.getByName(endpoint_address).getHostName();
             }
 
+            Token.TokenFactory factory = partitioner.getTokenFactory();
             for (int i = 1; i < tokens.size(); i++)
             {
-                ColumnFamilySplit split = new ColumnFamilySplit(tokens.get(i - 1), tokens.get(i), endpoints);
-                logger.debug("adding " + split);
-                splits.add(split);
+                Token left = factory.fromString(tokens.get(i - 1));
+                Token right = factory.fromString(tokens.get(i));
+                Range<Token> range = new Range<Token>(left, right, partitioner);
+                List<Range<Token>> ranges = range.isWrapAround() ? range.unwrap() : ImmutableList.of(range);
+                for (Range<Token> subrange : ranges)
+                {
+                    ColumnFamilySplit split = new ColumnFamilySplit(factory.toString(subrange.left), factory.toString(subrange.right), endpoints);
+                    logger.debug("adding " + split);
+                    splits.add(split);
+                }
             }
             return splits;
         }
@@ -233,13 +242,13 @@ public class ColumnFamilyInputFormat extends InputFormat<ByteBuffer, SortedMap<B
         for (int i = 0; i < range.rpc_endpoints.size(); i++)
         {
             String host = range.rpc_endpoints.get(i);
-            
+
             if (host == null || host.equals("0.0.0.0"))
                 host = range.endpoints.get(i);
-                        
+
             try
             {
-                Cassandra.Client client = ConfigHelper.createConnection(host, ConfigHelper.getRpcPort(conf), true);
+                Cassandra.Client client = ConfigHelper.createConnection(host, ConfigHelper.getInputRpcPort(conf), true);
                 client.set_keyspace(keyspace);
                 return client.describe_splits(cfName, range.start_token, range.end_token, splitsize);
             }
@@ -262,7 +271,7 @@ public class ColumnFamilyInputFormat extends InputFormat<ByteBuffer, SortedMap<B
 
     private List<TokenRange> getRangeMap(Configuration conf) throws IOException
     {
-        Cassandra.Client client = ConfigHelper.getClientFromAddressList(conf);
+        Cassandra.Client client = ConfigHelper.getClientFromInputAddressList(conf);
 
         List<TokenRange> map;
         try

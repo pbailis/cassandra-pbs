@@ -1,6 +1,4 @@
-package org.apache.cassandra.db.marshal;
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,24 +6,20 @@ package org.apache.cassandra.db.marshal;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+package org.apache.cassandra.db.marshal;
 
 import java.nio.ByteBuffer;
 
-import com.google.common.base.Charsets;
-
 import org.apache.cassandra.cql.jdbc.JdbcUTF8;
-import org.apache.cassandra.utils.ByteBufferUtil;
 
 public class UTF8Type extends AbstractType<String>
 {
@@ -40,7 +34,7 @@ public class UTF8Type extends AbstractType<String>
 
     public ByteBuffer decompose(String value)
     {
-        return ByteBufferUtil.bytes(value, Charsets.UTF_8);
+        return JdbcUTF8.instance.decompose(value);
     }
 
     public int compare(ByteBuffer o1, ByteBuffer o2)
@@ -70,7 +64,7 @@ public class UTF8Type extends AbstractType<String>
         if (!UTF8Validator.validate(bytes))
             throw new MarshalException("String didn't validate.");
     }
-    
+
     static class UTF8Validator
     {
         enum State {
@@ -82,11 +76,11 @@ public class UTF8Type extends AbstractType<String>
             THREE_80bf_2,
             FOUR_90bf,
             FOUR_80bf_3,
-        };    
-        
+        };
+
         // since we're not converting to java strings, we don't need to worry about converting to surrogates.
         // buf has already been sliced/duplicated.
-        static boolean validate(ByteBuffer buf) 
+        static boolean validate(ByteBuffer buf)
         {
             buf = buf.slice();
             int b = 0;
@@ -121,7 +115,7 @@ public class UTF8Type extends AbstractType<String>
                                 state = State.THREE_a0bf;
                             else
                                 state = State.THREE_80bf_2;
-                            break;            
+                            break;
                         }
                         else if ((b >> 3) == -2)
                         {
@@ -187,5 +181,13 @@ public class UTF8Type extends AbstractType<String>
             // if state != start, we've got underflow. that's an error.
             return state == State.START;
         }
+    }
+
+    @Override
+    public boolean isCompatibleWith(AbstractType<?> previous)
+    {
+        // Anything that is ascii is also utf8, and they both use bytes
+        // comparison
+        return this == previous || previous == AsciiType.instance;
     }
 }

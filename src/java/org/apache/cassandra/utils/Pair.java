@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.utils;
 
 import com.google.common.base.Objects;
@@ -37,7 +36,7 @@ public class Pair<T1, T2>
         int hashCode = 31 + (left == null ? 0 : left.hashCode());
         return 31*hashCode + (right == null ? 0 : right.hashCode());
     }
-    
+
     @Override
     public final boolean equals(Object o)
     {
@@ -47,7 +46,7 @@ public class Pair<T1, T2>
         // handles nulls properly
         return Objects.equal(left, that.left) && Objects.equal(right, that.right);
     }
-    
+
     @Override
     public String toString()
     {

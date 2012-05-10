@@ -27,22 +27,22 @@ import org.apache.cassandra.service.CassandraDaemon;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 
-public class EmbeddedServer extends CleanupHelper
+public class EmbeddedServer extends SchemaLoader
 {
     protected static CassandraDaemon daemon = null;
-    
+
     enum GatewayService
     {
         Thrift
     }
-    
+
     public static GatewayService getDaemonGatewayService()
     {
         return GatewayService.Thrift;
     }
-    
+
     static ExecutorService executor = Executors.newSingleThreadExecutor();
-    
+
     @BeforeClass
     public static void startCassandra() throws IOException
 
@@ -69,7 +69,7 @@ public class EmbeddedServer extends CleanupHelper
             throw new AssertionError(e);
         }
     }
-    
+
     @AfterClass
     public static void stopCassandra() throws Exception
     {
@@ -80,5 +80,5 @@ public class EmbeddedServer extends CleanupHelper
         executor.shutdown();
         executor.shutdownNow();
     }
-    
+
 }

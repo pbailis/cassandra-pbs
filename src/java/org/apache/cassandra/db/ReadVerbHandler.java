@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,30 +15,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.db;
 
-import java.io.ByteArrayOutputStream;
-import java.io.DataInputStream;
 import java.io.IOException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.apache.cassandra.io.util.DataOutputBuffer;
-import org.apache.cassandra.io.util.FastByteArrayInputStream;
 import org.apache.cassandra.net.IVerbHandler;
-import org.apache.cassandra.net.Message;
+import org.apache.cassandra.net.MessageIn;
+import org.apache.cassandra.net.MessageOut;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.utils.ByteBufferUtil;
-import org.apache.cassandra.utils.FBUtilities;
 
-public class ReadVerbHandler implements IVerbHandler
+public class ReadVerbHandler implements IVerbHandler<ReadCommand>
 {
-    private static Logger logger_ = LoggerFactory.getLogger( ReadVerbHandler.class );
+    private static final Logger logger = LoggerFactory.getLogger( ReadVerbHandler.class );
 
-    public void doVerb(Message message, String id)
+    public void doVerb(MessageIn<ReadCommand> message, String id)
     {
         if (StorageService.instance.isBootstrapMode())
         {
@@ -47,19 +42,17 @@ public class ReadVerbHandler implements IVerbHandler
 
         try
         {
-            FastByteArrayInputStream in = new FastByteArrayInputStream(message.getMessageBody());
-            ReadCommand command = ReadCommand.serializer().deserialize(new DataInputStream(in), message.getVersion());
+            ReadCommand command = message.payload;
             Table table = Table.open(command.table);
             Row row = command.getRow(table);
 
-            ReadResponse response = getResponse(command, row);
-            byte[] bytes = FBUtilities.serialize(response, ReadResponse.serializer(), message.getVersion());
-            Message reply = message.getReply(FBUtilities.getBroadcastAddress(), bytes, message.getVersion());
-
-            if (logger_.isDebugEnabled())
-              logger_.debug(String.format("Read key %s; sending response to %s@%s",
-                                          ByteBufferUtil.bytesToHex(command.key), id, message.getFrom()));
-            MessagingService.instance().sendReply(reply, id, message.getFrom());
+            MessageOut<ReadResponse> reply = new MessageOut<ReadResponse>(MessagingService.Verb.REQUEST_RESPONSE,
+                                                                          getResponse(command, row),
+                                                                          ReadResponse.serializer);
+            if (logger.isDebugEnabled())
+                logger.debug(String.format("Read key %s; sending response to %s@%s",
+                                            ByteBufferUtil.bytesToHex(command.key), id, message.from));
+            MessagingService.instance().sendReply(reply, id, message.from);
         }
         catch (IOException ex)
         {
@@ -71,8 +64,8 @@ public class ReadVerbHandler implements IVerbHandler
     {
         if (command.isDigestQuery())
         {
-            if (logger_.isDebugEnabled())
-                logger_.debug("digest is " + ByteBufferUtil.bytesToHex(ColumnFamily.digest(row.cf)));
+            if (logger.isDebugEnabled())
+                logger.debug("digest is " + ByteBufferUtil.bytesToHex(ColumnFamily.digest(row.cf)));
             return new ReadResponse(ColumnFamily.digest(row.cf));
         }
         else

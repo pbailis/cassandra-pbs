@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.db.commitlog;
 
 import java.io.File;
@@ -101,6 +100,7 @@ public class CommitLogAllocator
                         // almost always a segment available when it's needed.
                         if (availableSegments.isEmpty() && (activeSegments.isEmpty() || createReserveSegments))
                         {
+                            logger.debug("No segments in reserve; creating a fresh one");
                             createFreshSegment();
                         }
                     }
@@ -145,13 +145,19 @@ public class CommitLogAllocator
     public void recycleSegment(final CommitLogSegment segment)
     {
         activeSegments.remove(segment);
-
+        if (!CommitLog.instance.archiver.maybeWaitForArchiving(segment.getName()))
+        {
+            // if archiving (command) was not successful then leave the file alone. don't delete or recycle.
+            discardSegment(segment, false);
+            return;
+        }
         if (isCapExceeded())
         {
-            discardSegment(segment);
+            discardSegment(segment, true);
             return;
         }
 
+        logger.debug("Recycling {}", segment);
         queue.add(new Runnable()
         {
             public void run()
@@ -171,7 +177,7 @@ public class CommitLogAllocator
     public void recycleSegment(final File file)
     {
         // check against SEGMENT_SIZE avoids recycling odd-sized or empty segments from old C* versions and unit tests
-        if (isCapExceeded() || file.length() != CommitLog.SEGMENT_SIZE)
+        if (isCapExceeded() || file.length() != DatabaseDescriptor.getCommitLogSegmentSize())
         {
             try
             {
@@ -199,15 +205,16 @@ public class CommitLogAllocator
      *
      * @param segment segment to be discarded
      */
-    private void discardSegment(final CommitLogSegment segment)
+    private void discardSegment(final CommitLogSegment segment, final boolean deleteFile)
     {
-        size.addAndGet(-CommitLog.SEGMENT_SIZE);
+        logger.debug("Segment {} is no longer active and will be deleted {}", segment, deleteFile ? "now" : "by the archive script");
+        size.addAndGet(-DatabaseDescriptor.getCommitLogSegmentSize());
 
         queue.add(new Runnable()
         {
             public void run()
             {
-                segment.discard();
+                segment.discard(deleteFile);
             }
         });
     }
@@ -240,7 +247,7 @@ public class CommitLogAllocator
      */
     private CommitLogSegment createFreshSegment()
     {
-        size.addAndGet(CommitLog.SEGMENT_SIZE);
+        size.addAndGet(DatabaseDescriptor.getCommitLogSegmentSize());
         return internalAddReadySegment(CommitLogSegment.freshSegment());
     }
 
@@ -248,7 +255,7 @@ public class CommitLogAllocator
      * Adds a segment to our internal tracking list and makes it ready for consumption.
      *
      * @param   segment the segment to add
-     * @return  the newly added segment 
+     * @return  the newly added segment
      */
     private CommitLogSegment internalAddReadySegment(CommitLogSegment segment)
     {
@@ -335,7 +342,7 @@ public class CommitLogAllocator
      */
     public void awaitTermination() throws InterruptedException
     {
-        allocationThread.join(); 
+        allocationThread.join();
     }
 
     /**

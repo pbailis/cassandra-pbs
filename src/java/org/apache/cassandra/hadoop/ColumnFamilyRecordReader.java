@@ -1,6 +1,4 @@
-package org.apache.cassandra.hadoop;
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,18 +6,16 @@ package org.apache.cassandra.hadoop;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-
+package org.apache.cassandra.hadoop;
 
 import java.io.IOException;
 import java.net.InetAddress;
@@ -29,7 +25,9 @@ import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 import java.util.*;
 
-import com.google.common.collect.AbstractIterator;
+import com.google.common.collect.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.auth.IAuthenticator;
 import org.apache.cassandra.config.ConfigurationException;
@@ -41,7 +39,6 @@ import org.apache.cassandra.thrift.*;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.Pair;
-import org.apache.commons.lang.ArrayUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.mapreduce.InputSplit;
 import org.apache.hadoop.mapreduce.RecordReader;
@@ -53,6 +50,8 @@ import org.apache.thrift.transport.TSocket;
 public class ColumnFamilyRecordReader extends RecordReader<ByteBuffer, SortedMap<ByteBuffer, IColumn>>
     implements org.apache.hadoop.mapred.RecordReader<ByteBuffer, SortedMap<ByteBuffer, IColumn>>
 {
+    private static final Logger logger = LoggerFactory.getLogger(ColumnFamilyRecordReader.class);
+
     public static final int CASSANDRA_HADOOP_MAX_KEY_SIZE_DEFAULT = 8192;
 
     private ColumnFamilySplit split;
@@ -61,13 +60,14 @@ public class ColumnFamilyRecordReader extends RecordReader<ByteBuffer, SortedMap
     private SlicePredicate predicate;
     private boolean isEmptyPredicate;
     private int totalRowCount; // total number of rows to fetch
-    private int batchRowCount; // fetch this many per batch
+    private int batchSize; // fetch this many per batch
     private String cfName;
     private String keyspace;
     private TSocket socket;
     private Cassandra.Client client;
     private ConsistencyLevel consistencyLevel;
     private int keyBufferSize = 8192;
+    private List<IndexExpression> filter;
 
     public ColumnFamilyRecordReader()
     {
@@ -80,7 +80,7 @@ public class ColumnFamilyRecordReader extends RecordReader<ByteBuffer, SortedMap
         this.keyBufferSize = keyBufferSize;
     }
 
-    public void close() 
+    public void close()
     {
         if (socket != null && socket.isOpen())
         {
@@ -89,7 +89,7 @@ public class ColumnFamilyRecordReader extends RecordReader<ByteBuffer, SortedMap
             client = null;
         }
     }
-    
+
     public ByteBuffer getCurrentKey()
     {
         return currentRow.left;
@@ -99,48 +99,53 @@ public class ColumnFamilyRecordReader extends RecordReader<ByteBuffer, SortedMap
     {
         return currentRow.right;
     }
-    
+
     public float getProgress()
     {
+        // TODO this is totally broken for wide rows
         // the progress is likely to be reported slightly off the actual but close enough
         return ((float)iter.rowsRead()) / totalRowCount;
     }
-    
+
     static boolean isEmptyPredicate(SlicePredicate predicate)
     {
         if (predicate == null)
             return true;
-              
+
         if (predicate.isSetColumn_names() && predicate.getSlice_range() == null)
             return false;
-        
+
         if (predicate.getSlice_range() == null)
             return true;
-        
-        byte[] start  = predicate.getSlice_range().getStart();
-        byte[] finish = predicate.getSlice_range().getFinish(); 
-        if ( (start == null || start == ArrayUtils.EMPTY_BYTE_ARRAY) &&
-             (finish == null || finish == ArrayUtils.EMPTY_BYTE_ARRAY) )
-            return true;
-        
-        
-        return false;       
+
+        byte[] start = predicate.getSlice_range().getStart();
+        if ((start != null) && (start.length > 0))
+            return false;
+            
+        byte[] finish = predicate.getSlice_range().getFinish();
+        if ((finish != null) && (finish.length > 0))
+            return false;
+
+        return true;
     }
-    
+
     public void initialize(InputSplit split, TaskAttemptContext context) throws IOException
     {
         this.split = (ColumnFamilySplit) split;
         Configuration conf = context.getConfiguration();
+        KeyRange jobRange = ConfigHelper.getInputKeyRange(conf);
+        filter = jobRange == null ? null : jobRange.row_filter;
         predicate = ConfigHelper.getInputSlicePredicate(conf);
+        boolean widerows = ConfigHelper.getInputIsWide(conf);
         isEmptyPredicate = isEmptyPredicate(predicate);
         totalRowCount = ConfigHelper.getInputSplitSize(conf);
-        batchRowCount = ConfigHelper.getRangeBatchSize(conf);
+        batchSize = ConfigHelper.getRangeBatchSize(conf);
         cfName = ConfigHelper.getInputColumnFamily(conf);
         consistencyLevel = ConsistencyLevel.valueOf(ConfigHelper.getReadConsistencyLevel(conf));
-        
-        
+
+
         keyspace = ConfigHelper.getInputKeyspace(conf);
-        
+
         try
         {
             // only need to connect once
@@ -149,7 +154,7 @@ public class ColumnFamilyRecordReader extends RecordReader<ByteBuffer, SortedMap
 
             // create connection using thrift
             String location = getLocation();
-            socket = new TSocket(location, ConfigHelper.getRpcPort(conf));
+            socket = new TSocket(location, ConfigHelper.getInputRpcPort(conf));
             TBinaryProtocol binaryProtocol = new TBinaryProtocol(new TFramedTransport(socket));
             client = new Cassandra.Client(binaryProtocol);
             socket.open();
@@ -170,9 +175,10 @@ public class ColumnFamilyRecordReader extends RecordReader<ByteBuffer, SortedMap
             throw new RuntimeException(e);
         }
 
-        iter = new RowIterator();
+        iter = widerows ? new WideRowIterator() : new StaticRowIterator();
+        logger.debug("created {}", iter);
     }
-    
+
     public boolean nextKeyValue() throws IOException
     {
         if (!iter.hasNext())
@@ -219,15 +225,13 @@ public class ColumnFamilyRecordReader extends RecordReader<ByteBuffer, SortedMap
         return split.getLocations()[0];
     }
 
-    private class RowIterator extends AbstractIterator<Pair<ByteBuffer, SortedMap<ByteBuffer, IColumn>>>
+    private abstract class RowIterator extends AbstractIterator<Pair<ByteBuffer, SortedMap<ByteBuffer, IColumn>>>
     {
-        private List<KeySlice> rows;
-        private String startToken;
-        private int totalRead = 0;
-        private int i = 0;
-        private final AbstractType comparator;
-        private final AbstractType subComparator;
-        private final IPartitioner partitioner;
+        protected List<KeySlice> rows;
+        protected int totalRead = 0;
+        protected final AbstractType<?> comparator;
+        protected final AbstractType<?> subComparator;
+        protected final IPartitioner partitioner;
 
         private RowIterator()
         {
@@ -261,80 +265,6 @@ public class ColumnFamilyRecordReader extends RecordReader<ByteBuffer, SortedMap
             }
         }
 
-        private void maybeInit()
-        {
-            // check if we need another batch 
-            if (rows != null && i >= rows.size())
-                rows = null;
-            
-            if (rows != null)
-                return;
-
-            if (startToken == null)
-            {
-                startToken = split.getStartToken();
-            } 
-            else if (startToken.equals(split.getEndToken()))
-            {
-                // reached end of the split
-                rows = null;
-                return;
-            }
-            
-            KeyRange keyRange = new KeyRange(batchRowCount)
-                                .setStart_token(startToken)
-                                .setEnd_token(split.getEndToken());
-            try
-            {
-                rows = client.get_range_slices(new ColumnParent(cfName),
-                                               predicate,
-                                               keyRange,
-                                               consistencyLevel);
-                  
-                // nothing new? reached the end
-                if (rows.isEmpty())
-                {
-                    rows = null;
-                    return;
-                }
-                
-                // prepare for the next slice to be read
-                KeySlice lastRow = rows.get(rows.size() - 1);
-                ByteBuffer rowkey = lastRow.key;
-                startToken = partitioner.getTokenFactory().toString(partitioner.getToken(rowkey));
-                
-                // remove ghosts when fetching all columns
-                if (isEmptyPredicate)
-                {
-                    Iterator<KeySlice> it = rows.iterator();
-                    
-                    while(it.hasNext())
-                    {
-                        KeySlice ks = it.next();
-                        
-                        if (ks.getColumnsSize() == 0)
-                        {
-                           it.remove();
-                        }
-                    }
-                
-                    // all ghosts, spooky
-                    if (rows.isEmpty())
-                    {
-                        maybeInit();
-                        return;
-                    }
-                }
-                
-                // reset to iterate through this new batch
-                i = 0;             
-            }
-            catch (Exception e)
-            {
-                throw new RuntimeException(e);
-            }
-        }
-
         /**
          * @return total number of rows read by this record reader
          */
@@ -343,24 +273,7 @@ public class ColumnFamilyRecordReader extends RecordReader<ByteBuffer, SortedMap
             return totalRead;
         }
 
-        protected Pair<ByteBuffer, SortedMap<ByteBuffer, IColumn>> computeNext()
-        {
-            maybeInit();
-            if (rows == null)
-                return endOfData();
-            
-            totalRead++;
-            KeySlice ks = rows.get(i++);
-            SortedMap<ByteBuffer, IColumn> map = new TreeMap<ByteBuffer, IColumn>(comparator);
-            for (ColumnOrSuperColumn cosc : ks.columns)
-            {
-                IColumn column = unthriftify(cosc);
-                map.put(column.name(), column);
-            }
-            return new Pair<ByteBuffer, SortedMap<ByteBuffer, IColumn>>(ks.key, map);
-        }
-
-        private IColumn unthriftify(ColumnOrSuperColumn cosc)
+        protected IColumn unthriftify(ColumnOrSuperColumn cosc)
         {
             if (cosc.counter_column != null)
                 return unthriftifyCounter(cosc.counter_column);
@@ -382,7 +295,7 @@ public class ColumnFamilyRecordReader extends RecordReader<ByteBuffer, SortedMap
             return sc;
         }
 
-        private IColumn unthriftifySimple(Column column)
+        protected IColumn unthriftifySimple(Column column)
         {
             return new org.apache.cassandra.db.Column(column.name, column.value, column.timestamp);
         }
@@ -403,6 +316,200 @@ public class ColumnFamilyRecordReader extends RecordReader<ByteBuffer, SortedMap
         }
     }
 
+    private class StaticRowIterator extends RowIterator
+    {
+        protected int i = 0;
+
+        private void maybeInit()
+        {
+            // check if we need another batch
+            if (rows != null && i < rows.size())
+                return;
+
+            String startToken;
+            if (totalRead == 0)
+            {
+                // first request
+                startToken = split.getStartToken();
+            }
+            else
+            {
+                startToken = partitioner.getTokenFactory().toString(partitioner.getToken(Iterables.getLast(rows).key));
+                if (startToken.equals(split.getEndToken()))
+                {
+                    // reached end of the split
+                    rows = null;
+                    return;
+                }
+            }
+
+            KeyRange keyRange = new KeyRange(batchSize)
+                                .setStart_token(startToken)
+                                .setEnd_token(split.getEndToken())
+                                .setRow_filter(filter);
+            try
+            {
+                rows = client.get_range_slices(new ColumnParent(cfName), predicate, keyRange, consistencyLevel);
+
+                // nothing new? reached the end
+                if (rows.isEmpty())
+                {
+                    rows = null;
+                    return;
+                }
+
+                // remove ghosts when fetching all columns
+                if (isEmptyPredicate)
+                {
+                    Iterator<KeySlice> it = rows.iterator();
+                    while (it.hasNext())
+                    {
+                        KeySlice ks = it.next();
+                        if (ks.getColumnsSize() == 0)
+                        {
+                           it.remove();
+                        }
+                    }
+
+                    // all ghosts, spooky
+                    if (rows.isEmpty())
+                    {
+                        maybeInit();
+                        return;
+                    }
+                }
+
+                // reset to iterate through this new batch
+                i = 0;
+            }
+            catch (Exception e)
+            {
+                throw new RuntimeException(e);
+            }
+        }
+
+        protected Pair<ByteBuffer, SortedMap<ByteBuffer, IColumn>> computeNext()
+        {
+            maybeInit();
+            if (rows == null)
+                return endOfData();
+
+            totalRead++;
+            KeySlice ks = rows.get(i++);
+            SortedMap<ByteBuffer, IColumn> map = new TreeMap<ByteBuffer, IColumn>(comparator);
+            for (ColumnOrSuperColumn cosc : ks.columns)
+            {
+                IColumn column = unthriftify(cosc);
+                map.put(column.name(), column);
+            }
+            return new Pair<ByteBuffer, SortedMap<ByteBuffer, IColumn>>(ks.key, map);
+        }
+    }
+
+    private class WideRowIterator extends RowIterator
+    {
+        private PeekingIterator<Pair<ByteBuffer, SortedMap<ByteBuffer, IColumn>>> wideColumns;
+        private ByteBuffer lastColumn = ByteBufferUtil.EMPTY_BYTE_BUFFER;
+
+        private void maybeInit()
+        {
+            if (wideColumns != null && wideColumns.hasNext())
+                return;
+
+            KeyRange keyRange;
+            ByteBuffer startColumn;
+            if (totalRead == 0)
+            {
+                String startToken = split.getStartToken();
+                keyRange = new KeyRange(batchSize)
+                          .setStart_token(startToken)
+                          .setEnd_token(split.getEndToken())
+                          .setRow_filter(filter);
+            }
+            else
+            {
+                KeySlice lastRow = Iterables.getLast(rows);
+                logger.debug("Starting with last-seen row {}", lastRow.key);
+                keyRange = new KeyRange(batchSize)
+                          .setStart_key(lastRow.key)
+                          .setEnd_token(split.getEndToken())
+                          .setRow_filter(filter);
+            }
+
+            try
+            {
+                rows = client.get_paged_slice(cfName, keyRange, lastColumn, consistencyLevel);
+                int n = 0;
+                for (KeySlice row : rows)
+                    n += row.columns.size();
+                logger.debug("read {} columns in {} rows for {} starting with {}",
+                             new Object[]{ n, rows.size(), keyRange, lastColumn });
+
+                wideColumns = Iterators.peekingIterator(new WideColumnIterator(rows));
+                if (wideColumns.hasNext() && wideColumns.peek().right.keySet().iterator().next().equals(lastColumn))
+                    wideColumns.next();
+                if (!wideColumns.hasNext())
+                    rows = null;
+            }
+            catch (Exception e)
+            {
+                throw new RuntimeException(e);
+            }
+        }
+
+        protected Pair<ByteBuffer, SortedMap<ByteBuffer, IColumn>> computeNext()
+        {
+            maybeInit();
+            if (rows == null)
+                return endOfData();
+
+            totalRead++;
+            Pair<ByteBuffer, SortedMap<ByteBuffer, IColumn>> next = wideColumns.next();
+            lastColumn = next.right.values().iterator().next().name();
+            return next;
+        }
+
+        private class WideColumnIterator extends AbstractIterator<Pair<ByteBuffer, SortedMap<ByteBuffer, IColumn>>>
+        {
+            private final Iterator<KeySlice> rows;
+            private Iterator<ColumnOrSuperColumn> columns;
+            public KeySlice currentRow;
+
+            public WideColumnIterator(List<KeySlice> rows)
+            {
+                this.rows = rows.iterator();
+                if (this.rows.hasNext())
+                    nextRow();
+                else
+                    columns = Iterators.emptyIterator();
+            }
+
+            private void nextRow()
+            {
+                currentRow = rows.next();
+                columns = currentRow.columns.iterator();
+            }
+
+            protected Pair<ByteBuffer, SortedMap<ByteBuffer, IColumn>> computeNext()
+            {
+                while (true)
+                {
+                    if (columns.hasNext())
+                    {
+                        ColumnOrSuperColumn cosc = columns.next();
+                        IColumn column = unthriftify(cosc);
+                        ImmutableSortedMap<ByteBuffer, IColumn> map = ImmutableSortedMap.of(column.name(), column);
+                        return Pair.<ByteBuffer, SortedMap<ByteBuffer, IColumn>>create(currentRow.key, map);
+                    }
+
+                    if (!rows.hasNext())
+                        return endOfData();
+
+                    nextRow();
+                }
+            }
+        }
+    }
 
     // Because the old Hadoop API wants us to write to the key and value
     // and the new asks for them, we need to copy the output of the new API

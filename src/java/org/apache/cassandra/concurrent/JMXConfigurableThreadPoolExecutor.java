@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,23 +15,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.concurrent;
 
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
 
-public class JMXConfigurableThreadPoolExecutor extends JMXEnabledThreadPoolExecutor implements JMXConfigurableThreadPoolExecutorMBean 
+public class JMXConfigurableThreadPoolExecutor extends JMXEnabledThreadPoolExecutor implements JMXConfigurableThreadPoolExecutorMBean
 {
 
     public JMXConfigurableThreadPoolExecutor(int corePoolSize,
-        	                                 long keepAliveTime,
-        	                                 TimeUnit unit,
-                                             BlockingQueue<Runnable> workQueue, 
+                                             long keepAliveTime,
+                                             TimeUnit unit,
+                                             BlockingQueue<Runnable> workQueue,
                                              NamedThreadFactory threadFactory,
                                              String jmxPath)
     {
         super(corePoolSize, keepAliveTime, unit, workQueue, threadFactory, jmxPath);
     }
-    
+
 }

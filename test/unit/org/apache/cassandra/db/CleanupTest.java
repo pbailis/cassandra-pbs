@@ -19,8 +19,6 @@
 package org.apache.cassandra.db;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
-
 import java.io.IOException;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
@@ -29,7 +27,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 
-import org.apache.cassandra.CleanupHelper;
+import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.Util;
 import org.apache.cassandra.config.ConfigurationException;
 import org.apache.cassandra.db.columniterator.IdentityQueryFilter;
@@ -40,18 +38,16 @@ import org.apache.cassandra.db.index.SecondaryIndex;
 import org.apache.cassandra.dht.BytesToken;
 import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.dht.Range;
-import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.io.sstable.SSTableReader;
 import org.apache.cassandra.locator.TokenMetadata;
 import org.apache.cassandra.service.StorageService;
-import org.apache.cassandra.thrift.IndexClause;
 import org.apache.cassandra.thrift.IndexExpression;
 import org.apache.cassandra.thrift.IndexOperator;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.NodeId;
 import org.junit.Test;
 
-public class CleanupTest extends CleanupHelper
+public class CleanupTest extends SchemaLoader
 {
     public static final int LOOPS = 200;
     public static final String TABLE1 = "Keyspace1";
@@ -81,7 +77,7 @@ public class CleanupTest extends CleanupHelper
         // record max timestamps of the sstables pre-cleanup
         List<Long> expectedMaxTimestamps = getMaxTimestampList(cfs);
 
-        rows = cfs.getRangeSlice(null, Util.range("", ""), 1000, new IdentityQueryFilter());
+        rows = Util.getRangeSlice(cfs);
         assertEquals(LOOPS, rows.size());
 
         // with one token in the ring, owned by the local node, cleanup should be a no-op
@@ -91,7 +87,7 @@ public class CleanupTest extends CleanupHelper
         assert expectedMaxTimestamps.equals(getMaxTimestampList(cfs));
 
         // check data is still there
-        rows = cfs.getRangeSlice(null, Util.range("", ""), 1000, new IdentityQueryFilter());
+        rows = Util.getRangeSlice(cfs);
         assertEquals(LOOPS, rows.size());
     }
 
@@ -106,7 +102,7 @@ public class CleanupTest extends CleanupHelper
 
         // insert data and verify we get it back w/ range query
         fillCF(cfs, LOOPS);
-        rows = cfs.getRangeSlice(null, Util.range("", ""), 1000, new IdentityQueryFilter());
+        rows = Util.getRangeSlice(cfs);
         assertEquals(LOOPS, rows.size());
 
         SecondaryIndex index = cfs.indexManager.getIndexForColumn(COLUMN);
@@ -116,11 +112,11 @@ public class CleanupTest extends CleanupHelper
 
         // verify we get it back w/ index query too
         IndexExpression expr = new IndexExpression(COLUMN, IndexOperator.EQ, VALUE);
-        IndexClause clause = new IndexClause(Arrays.asList(expr), ByteBufferUtil.EMPTY_BYTE_BUFFER, Integer.MAX_VALUE);
+        List<IndexExpression> clause = Arrays.asList(expr);
         IFilter filter = new IdentityQueryFilter();
         IPartitioner p = StorageService.getPartitioner();
         Range<RowPosition> range = Util.range("", "");
-        rows = table.getColumnFamilyStore(CF1).search(clause, range, filter);
+        rows = table.getColumnFamilyStore(CF1).search(clause, range, Integer.MAX_VALUE, filter);
         assertEquals(LOOPS, rows.size());
 
         // we don't allow cleanup when the local host has no range to avoid wipping up all data when a node has not join the ring.
@@ -135,14 +131,14 @@ public class CleanupTest extends CleanupHelper
         CompactionManager.instance.performCleanup(cfs, new NodeId.OneShotRenewer());
 
         // row data should be gone
-        rows = cfs.getRangeSlice(null, range, 1000, new IdentityQueryFilter());
+        rows = Util.getRangeSlice(cfs);
         assertEquals(0, rows.size());
 
         // not only should it be gone but there should be no data on disk, not even tombstones
         assert cfs.getSSTables().isEmpty();
 
         // 2ary indexes should result in no results, too (although tombstones won't be gone until compacted)
-        rows = cfs.search(clause, range, filter);
+        rows = cfs.search(clause, range, Integer.MAX_VALUE, filter);
         assertEquals(0, rows.size());
     }
 

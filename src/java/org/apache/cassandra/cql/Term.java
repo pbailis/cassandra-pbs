@@ -1,5 +1,4 @@
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -7,16 +6,14 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.apache.cassandra.cql;
 
@@ -47,7 +44,7 @@ public class Term
     /**
      * Create new Term instance from a string, and an integer that corresponds
      * with the token ID from CQLParser.
-     * 
+     *
      * @param text the text representation of the term.
      * @param type the term's type as an integer token ID.
      */
@@ -74,42 +71,42 @@ public class Term
 
     /**
      * Returns the text parsed to create this term.
-     * 
+     *
      * @return the string term acquired from a CQL statement.
      */
     public String getText()
     {
         return text;
     }
-        
+
     /**
      * Returns the typed value, serialized to a ByteBuffer according to a
      * comparator/validator.
-     * 
+     *
      * @return a ByteBuffer of the value.
      * @throws InvalidRequestException if unable to coerce the string to its type.
      */
-    public ByteBuffer getByteBuffer(AbstractType<?> validator, List<String> variables) throws InvalidRequestException
+    public ByteBuffer getByteBuffer(AbstractType<?> validator, List<ByteBuffer> variables) throws InvalidRequestException
     {
         try
         {
             if (!isBindMarker()) return validator.fromString(text);
-            
+
             // must be a marker term so check for a CqlBindValue stored in the term
             if (bindIndex == null)
                 throw new AssertionError("a marker Term was encountered with no index value");
-                        
-            return validator.fromString(variables.get(bindIndex));
+
+            return variables.get(bindIndex);
         }
         catch (MarshalException e)
         {
             throw new InvalidRequestException(e.getMessage());
         }
     }
-    
+
     /**
      * Returns the typed value, serialized to a ByteBuffer.
-     * 
+     *
      * @return a ByteBuffer of the value.
      * @throws InvalidRequestException if unable to coerce the string to its type.
      */
@@ -119,35 +116,35 @@ public class Term
         {
             case STRING:
                 return AsciiType.instance.fromString(text);
-            case INTEGER: 
+            case INTEGER:
                 return IntegerType.instance.fromString(text);
             case UUID:
                 // we specifically want the Lexical class here, not "UUIDType," because we're supposed to have
                 // a uuid-shaped string here, and UUIDType also accepts integer or date strings (and turns them into version 1 uuids).
                 return LexicalUUIDType.instance.fromString(text);
-            case FLOAT: 
+            case FLOAT:
               return FloatType.instance.fromString(text);
         }
-        
+
         // FIXME: handle scenario that should never happen
         return null;
     }
 
     /**
      * Obtain the term's type.
-     * 
+     *
      * @return the type
      */
     public TermType getType()
     {
         return type;
     }
-    
+
     public String toString()
     {
         return String.format("Term(%s, type=%s)", getText(), type);
     }
-    
+
     public boolean isBindMarker()
     {
         return type==TermType.QMARK;
@@ -173,7 +170,7 @@ public class Term
         if (getClass() != obj.getClass())
             return false;
         Term other = (Term) obj;
-        if (type==TermType.QMARK) return false; // markers are never equal 
+        if (type==TermType.QMARK) return false; // markers are never equal
         if (text == null)
         {
             if (other.text != null)
@@ -185,13 +182,13 @@ public class Term
         return true;
     }
 
-    
+
 }
 
 enum TermType
 {
     STRING, INTEGER, UUID, FLOAT, QMARK;
-    
+
     static TermType forInt(int type)
     {
         if ((type == CqlParser.STRING_LITERAL) || (type == CqlParser.IDENT))
@@ -204,7 +201,7 @@ enum TermType
             return FLOAT;
         else if (type == CqlParser.QMARK)
             return QMARK;
-        
+
         // FIXME: handled scenario that should never occur.
         return null;
     }

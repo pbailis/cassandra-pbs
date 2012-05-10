@@ -28,11 +28,10 @@ import org.junit.Test;
 
 import org.apache.cassandra.config.ConfigurationException;
 import org.apache.cassandra.dht.Token;
-import org.apache.cassandra.CleanupHelper;
+import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.config.DatabaseDescriptor;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public class StorageServiceServerTest
@@ -40,8 +39,8 @@ public class StorageServiceServerTest
     @Test
     public void testRegularMode() throws IOException, InterruptedException, ConfigurationException
     {
-        CleanupHelper.mkdirs();
-        CleanupHelper.cleanup();
+        SchemaLoader.mkdirs();
+        SchemaLoader.cleanup();
         StorageService.instance.initServer(0);
         for (String path : DatabaseDescriptor.getAllDataFileLocations())
         {
@@ -68,4 +67,12 @@ public class StorageServiceServerTest
         // no need to insert extra data, even an "empty" database will have a little information in the system keyspace
         StorageService.instance.takeSnapshot("snapshot", new String[0]);
     }
+
+    @Test
+    public void testColumnFamilySnapshot() throws IOException
+    {
+        // no need to insert extra data, even an "empty" database will have a little information in the system keyspace
+        StorageService.instance.takeColumnFamilySnapshot("system", "Schema", "cf_snapshot");
+    }
+
 }

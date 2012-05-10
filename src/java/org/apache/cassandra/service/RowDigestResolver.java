@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.service;
 
 import java.io.IOException;
@@ -25,7 +24,7 @@ import java.util.Map;
 import org.apache.cassandra.db.ColumnFamily;
 import org.apache.cassandra.db.ReadResponse;
 import org.apache.cassandra.db.Row;
-import org.apache.cassandra.net.Message;
+import org.apache.cassandra.net.MessageIn;
 
 public class RowDigestResolver extends AbstractRowResolver
 {
@@ -39,9 +38,9 @@ public class RowDigestResolver extends AbstractRowResolver
      */
     public Row getData() throws IOException
     {
-        for (Map.Entry<Message, ReadResponse> entry : replies.entrySet())
+        for (MessageIn<ReadResponse> message : replies)
         {
-            ReadResponse result = entry.getValue();
+            ReadResponse result = message.payload;
             if (!result.isDigestQuery())
                 return result.row();
         }
@@ -70,9 +69,10 @@ public class RowDigestResolver extends AbstractRowResolver
         // also extract the data reply, if any.
         ColumnFamily data = null;
         ByteBuffer digest = null;
-        for (Map.Entry<Message, ReadResponse> entry : replies.entrySet())
+
+        for (MessageIn<ReadResponse> message : replies)
         {
-            ReadResponse response = entry.getValue();
+            ReadResponse response = message.payload;
             if (response.isDigestQuery())
             {
                 if (digest == null)
@@ -92,7 +92,7 @@ public class RowDigestResolver extends AbstractRowResolver
             }
         }
 
-		// Compare digest (only one, since we threw earlier if there were different replies)
+        // Compare digest (only one, since we threw earlier if there were different replies)
         // with the data response. If there is a mismatch then throw an exception so that read repair can happen.
         //
         // It's important to note that we do not consider the possibility of multiple data responses --
@@ -108,14 +108,14 @@ public class RowDigestResolver extends AbstractRowResolver
 
         if (logger.isDebugEnabled())
             logger.debug("resolve: " + (System.currentTimeMillis() - startTime) + " ms.");
-		return new Row(key, data);
-	}
+        return new Row(key, data);
+    }
 
     public boolean isDataPresent()
-	{
-        for (ReadResponse result : replies.values())
+    {
+        for (MessageIn<ReadResponse> message : replies)
         {
-            if (!result.isDigestQuery())
+            if (!message.payload.isDigestQuery())
                 return true;
         }
         return false;

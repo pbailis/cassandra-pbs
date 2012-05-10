@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,29 +15,28 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.dht;
 
 import java.io.Serializable;
-import java.nio.ByteBuffer;
 import java.util.*;
 
-import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.commons.lang.ObjectUtils;
 
 import org.apache.cassandra.db.RowPosition;
 import org.apache.cassandra.service.StorageService;
-import org.apache.cassandra.utils.FBUtilities;
+import org.apache.cassandra.utils.Pair;
 
 /**
  * A representation of the range that a node is responsible for on the DHT ring.
  *
  * A Range is responsible for the tokens between (left, right].
+ *
+ * Used by the partitioner and by map/reduce by-token range scans.
  */
 public class Range<T extends RingPosition> extends AbstractBounds<T> implements Comparable<Range<T>>, Serializable
 {
     public static final long serialVersionUID = 1L;
-    
+
     public Range(T left, T right)
     {
         this(left, right, StorageService.getPartitioner());
@@ -48,28 +47,28 @@ public class Range<T extends RingPosition> extends AbstractBounds<T> implements 
         super(left, right, partitioner);
     }
 
-    public static <T extends RingPosition> boolean contains(T left, T right, T bi)
+    public static <T extends RingPosition> boolean contains(T left, T right, T point)
     {
         if (isWrapAround(left, right))
         {
-            /* 
+            /*
              * We are wrapping around, so the interval is (a,b] where a >= b,
              * then we have 3 cases which hold for any given token k:
              * (1) a < k -- return true
              * (2) k <= b -- return true
              * (3) b < k <= a -- return false
              */
-            if (bi.compareTo(left) > 0)
+            if (point.compareTo(left) > 0)
                 return true;
             else
-                return right.compareTo(bi) >= 0;
+                return right.compareTo(point) >= 0;
         }
         else
         {
             /*
-             * This is the range (a, b] where a < b. 
+             * This is the range (a, b] where a < b.
              */
-            return bi.compareTo(left) > 0 && right.compareTo(bi) >= 0;
+            return point.compareTo(left) > 0 && right.compareTo(point) >= 0;
         }
     }
 
@@ -104,12 +103,12 @@ public class Range<T extends RingPosition> extends AbstractBounds<T> implements 
     /**
      * Helps determine if a given point on the DHT ring is contained
      * in the range in question.
-     * @param bi point in question
+     * @param point point in question
      * @return true if the point contains within the range else false.
      */
-    public boolean contains(T bi)
+    public boolean contains(T point)
     {
-        return contains(left, right, bi);
+        return contains(left, right, point);
     }
 
     /**
@@ -119,6 +118,25 @@ public class Range<T extends RingPosition> extends AbstractBounds<T> implements 
     public boolean intersects(Range<T> that)
     {
         return intersectionWith(that).size() > 0;
+    }
+
+    public boolean intersects(AbstractBounds<T> that)
+    {
+        // implemented for cleanup compaction membership test, so only Range + Bounds are supported for now
+        if (that instanceof Range)
+            return intersects((Range) that);
+        if (that instanceof Bounds)
+            return intersects((Bounds) that);
+        throw new UnsupportedOperationException("Intersection is only supported for Bounds and Range objects; found " + that.getClass());
+    }
+
+    /**
+     * @param that range to check for intersection
+     * @return true if the given range intersects with this range.
+     */
+    public boolean intersects(Bounds<T> that)
+    {
+        return intersects(new Range<T>(that.left, that.right)) || contains(that.right);
     }
 
     public static <T extends RingPosition> Set<Range<T>> rangeSet(Range<T> ... ranges)
@@ -197,19 +215,24 @@ public class Range<T extends RingPosition> extends AbstractBounds<T> implements 
         return Collections.unmodifiableSet(intersection);
     }
 
-    public AbstractBounds<T> createFrom(T pos)
+    public Pair<AbstractBounds<T>, AbstractBounds<T>> split(T position)
     {
-        if (pos.equals(left))
+        assert contains(position) || left.equals(position);
+        // Check if the split would have no effect on the range
+        if (position.equals(left) || position.equals(right))
             return null;
-        return new Range<T>(left, pos, partitioner);
+
+        AbstractBounds<T> lb = new Range<T>(left, position, partitioner);
+        AbstractBounds<T> rb = new Range<T>(position, right, partitioner);
+        return new Pair<AbstractBounds<T>, AbstractBounds<T>>(lb, rb);
     }
 
-    public List<? extends AbstractBounds<T>> unwrap()
+    public List<Range<T>> unwrap()
     {
         T minValue = (T) partitioner.minValue(right.getClass());
         if (!isWrapAround() || right.equals(minValue))
             return Arrays.asList(this);
-        List<AbstractBounds<T>> unwrapped = new ArrayList<AbstractBounds<T>>(2);
+        List<Range<T>> unwrapped = new ArrayList<Range<T>>(2);
         unwrapped.add(new Range<T>(left, minValue, partitioner));
         unwrapped.add(new Range<T>(minValue, right, partitioner));
         return unwrapped;
@@ -225,7 +248,7 @@ public class Range<T extends RingPosition> extends AbstractBounds<T> implements 
 
     public int compareTo(Range<T> rhs)
     {
-        /* 
+        /*
          * If the range represented by the "this" pointer
          * is a wrap around then it is the smaller one.
          */
@@ -234,7 +257,7 @@ public class Range<T extends RingPosition> extends AbstractBounds<T> implements 
 
         if ( isWrapAround(rhs.left, rhs.right) )
             return 1;
-        
+
         return right.compareTo(rhs.right);
     }
 
@@ -247,7 +270,7 @@ public class Range<T extends RingPosition> extends AbstractBounds<T> implements 
      */
     private ArrayList<Range<T>> subtractContained(Range<T> contained)
     {
-        ArrayList<Range<T>> difference = new ArrayList<Range<T>>();
+        ArrayList<Range<T>> difference = new ArrayList<Range<T>>(2);
 
         if (!left.equals(contained.left))
             difference.add(new Range<T>(left, contained.left, partitioner));
@@ -255,6 +278,12 @@ public class Range<T extends RingPosition> extends AbstractBounds<T> implements 
             difference.add(new Range<T>(contained.right, right, partitioner));
         return difference;
     }
+
+    public Set<Range<T>> subtract(Range<T> rhs)
+    {
+        return rhs.differenceToFetch(this);
+    }
+
 
     /**
      * Calculate set of the difference ranges of given two ranges
@@ -326,10 +355,91 @@ public class Range<T extends RingPosition> extends AbstractBounds<T> implements 
         return "(" + left + "," + right + "]";
     }
 
+    public List<String> asList()
+    {
+        ArrayList<String> ret = new ArrayList<String>(2);
+        ret.add(left.toString());
+        ret.add(right.toString());
+        return ret;
+    }
+
     public boolean isWrapAround()
     {
         return isWrapAround(left, right);
     }
+
+    /**
+     * @return A copy of the given list of with all ranges unwrapped, sorted by left bound and with overlapping bounds merged.
+     */
+    public static <T extends RingPosition> List<Range<T>> normalize(Collection<Range<T>> ranges)
+    {
+        // unwrap all
+        List<Range<T>> output = new ArrayList<Range<T>>(ranges.size());
+        for (Range<T> range : ranges)
+            output.addAll(range.unwrap());
+
+        // sort by left
+        Collections.sort(output, new Comparator<Range<T>>()
+        {
+            public int compare(Range<T> b1, Range<T> b2)
+            {
+                return b1.left.compareTo(b2.left);
+            }
+        });
+
+        // deoverlap
+        return deoverlap(output);
+    }
+
+    /**
+     * Given a list of unwrapped ranges sorted by left position, return an
+     * equivalent list of ranges but with no overlapping ranges.
+     */
+    private static <T extends RingPosition> List<Range<T>> deoverlap(List<Range<T>> ranges)
+    {
+        if (ranges.isEmpty())
+            return ranges;
+
+        List<Range<T>> output = new ArrayList<Range<T>>();
+
+        Iterator<Range<T>> iter = ranges.iterator();
+        Range<T> current = iter.next();
+
+        T min = (T) current.partitioner.minValue(current.left.getClass());
+        while (iter.hasNext())
+        {
+            // If current goes to the end of the ring, we're done
+            if (current.right.equals(min))
+            {
+                // If one range is the full range, we return only that
+                if (current.left.equals(min))
+                    return Collections.<Range<T>>singletonList(current);
+
+                output.add(new Range<T>(current.left, min));
+                return output;
+            }
+
+            Range<T> next = iter.next();
+
+            // if next left is equal to current right, we do not intersect per se, but replacing (A, B] and (B, C] by (A, C] is
+            // legit, and since this avoid special casing and will result in more "optimal" ranges, we do the transformation
+            if (next.left.compareTo(current.right) <= 0)
+            {
+                // We do overlap
+                // (we've handled current.right.equals(min) already)
+                if (next.right.equals(min) || current.right.compareTo(next.right) < 0)
+                    current = new Range<T>(current.left, next.right);
+            }
+            else
+            {
+                output.add(current);
+                current = next;
+            }
+        }
+        output.add(current);
+        return output;
+    }
+
 
     /**
      * Compute a range of keys corresponding to a given range of token.

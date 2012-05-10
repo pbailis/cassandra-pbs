@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -7,14 +7,13 @@
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.apache.cassandra.io.sstable;
 
@@ -26,9 +25,10 @@ import java.util.HashSet;
 import java.util.Set;
 
 import org.apache.cassandra.config.CFMetaData;
+import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.context.CounterContext;
-import org.apache.cassandra.service.StorageService;
+import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.utils.NodeId;
 import org.apache.cassandra.utils.Pair;
 
@@ -41,10 +41,11 @@ public abstract class AbstractSSTableSimpleWriter
     protected SuperColumn currentSuperColumn;
     protected final NodeId nodeid = NodeId.generate();
 
-    public AbstractSSTableSimpleWriter(File directory, CFMetaData metadata)
+    public AbstractSSTableSimpleWriter(File directory, CFMetaData metadata, IPartitioner partitioner)
     {
         this.metadata = metadata;
         this.directory = directory;
+        DatabaseDescriptor.setPartitioner(partitioner);
     }
 
     protected SSTableWriter getWriter() throws IOException
@@ -53,7 +54,7 @@ public abstract class AbstractSSTableSimpleWriter
             makeFilename(directory, metadata.ksName, metadata.cfName),
             0, // We don't care about the bloom filter
             metadata,
-            StorageService.getPartitioner(),
+            DatabaseDescriptor.getPartitioner(),
             SSTableMetadata.createCollector());
     }
 
@@ -79,7 +80,7 @@ public abstract class AbstractSSTableSimpleWriter
         int maxGen = 0;
         for (Descriptor desc : existing)
             maxGen = Math.max(maxGen, desc.generation);
-        return new Descriptor(directory, keyspace, columnFamily, maxGen + 1, false).filenameFor(Component.DATA);
+        return new Descriptor(directory, keyspace, columnFamily, maxGen + 1, true).filenameFor(Component.DATA);
     }
 
     /**
@@ -91,7 +92,7 @@ public abstract class AbstractSSTableSimpleWriter
         if (currentKey != null && !columnFamily.isEmpty())
             writeRow(currentKey, columnFamily);
 
-        currentKey = StorageService.getPartitioner().decorateKey(key);
+        currentKey = DatabaseDescriptor.getPartitioner().decorateKey(key);
         columnFamily = getColumnFamily();
     }
 

@@ -1,6 +1,4 @@
-package org.apache.cassandra.io.sstable;
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,25 +6,23 @@ package org.apache.cassandra.io.sstable;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-
+package org.apache.cassandra.io.sstable;
 
 import java.io.File;
 import java.util.StringTokenizer;
 
 import com.google.common.base.Objects;
 
-import org.apache.cassandra.db.Table;
+import org.apache.cassandra.utils.FilterFactory;
 import org.apache.cassandra.utils.Pair;
 
 import static org.apache.cassandra.io.sstable.Component.separator;
@@ -58,7 +54,11 @@ public class Descriptor
     // h (1.0): tracks max client timestamp in metadata component
     // hb (1.0.3): records compression ration in metadata component
     // hc (1.0.4): records partitioner in metadata component
-    public static final String CURRENT_VERSION = "hc";
+    // hd (1.0.10): includes row tombstones in maxtimestamp
+    // ia (1.2.0): column indexes are promoted to the index file
+    //             records estimated histogram of deletion times in tombstones
+    //             bloom filter (keys and columns) upgraded to Murmur3
+    public static final String CURRENT_VERSION = "ia";
 
     public final File directory;
     /** version has the following format: <code>[a-z]+</code> */
@@ -73,11 +73,13 @@ public class Descriptor
     public final boolean hasIntRowSize;
     public final boolean hasEncodedKeys;
     public final boolean isLatestVersion;
-    public final boolean usesOldBloomFilter;
     public final boolean metadataIncludesReplayPosition;
     public final boolean tracksMaxTimestamp;
     public final boolean hasCompressionRatio;
     public final boolean hasPartitioner;
+    public final boolean tracksTombstones;
+    public final boolean hasPromotedIndexes;
+    public final FilterFactory.Type filterType;
 
     /**
      * A descriptor that assumes CURRENT_VERSION.
@@ -101,23 +103,31 @@ public class Descriptor
         hasStringsInBloomFilter = version.compareTo("c") < 0;
         hasIntRowSize = version.compareTo("d") < 0;
         hasEncodedKeys = version.compareTo("e") < 0;
-        usesOldBloomFilter = version.compareTo("f") < 0;
         metadataIncludesReplayPosition = version.compareTo("g") >= 0;
-        tracksMaxTimestamp = version.compareTo("h") >= 0;
+        tracksMaxTimestamp = version.compareTo("hd") >= 0;
         hasCompressionRatio = version.compareTo("hb") >= 0;
         hasPartitioner = version.compareTo("hc") >= 0;
+        tracksTombstones = version.compareTo("ia") >= 0;
+        hasPromotedIndexes = version.compareTo("ia") >= 0;
         isLatestVersion = version.compareTo(CURRENT_VERSION) == 0;
+        if (version.compareTo("f") < 0)
+            filterType = FilterFactory.Type.SHA;
+        else if (version.compareTo("ia") < 0)
+            filterType = FilterFactory.Type.MURMUR2;
+        else
+            filterType = FilterFactory.Type.MURMUR3;
     }
 
     public String filenameFor(Component component)
     {
         return filenameFor(component.name());
     }
-    
+
     private String baseFilename()
     {
         StringBuilder buff = new StringBuilder();
         buff.append(directory).append(File.separatorChar);
+        buff.append(ksname).append(separator);
         buff.append(cfname).append(separator);
         if (temporary)
             buff.append(SSTable.TEMPFILE_MARKER).append(separator);
@@ -144,12 +154,11 @@ public class Descriptor
     public static Descriptor fromFilename(String filename)
     {
         File file = new File(filename);
-        assert file.getParentFile() != null : "Filename must include parent directory.";
         return fromFilename(file.getParentFile(), file.getName()).left;
     }
 
     /**
-     * Filename of the form "<ksname>/<cfname>-[tmp-][<version>-]<gen>-<component>"
+     * Filename of the form "<ksname>-<cfname>-[tmp-][<version>-]<gen>-<component>"
      *
      * @param directory The directory of the SSTable files
      * @param name The name of the SSTable file
@@ -158,14 +167,12 @@ public class Descriptor
      */
     public static Pair<Descriptor,String> fromFilename(File directory, String name)
     {
-        // name of parent directory is keyspace name
-        String ksname = extractKeyspaceName(directory);
-
         // tokenize the filename
         StringTokenizer st = new StringTokenizer(name, String.valueOf(separator));
         String nexttok;
 
-        // all filenames must start with a column family
+        // all filenames must start with keyspace and column family
+        String ksname = st.nextToken();
         String cfname = st.nextToken();
 
         // optional temporary marker
@@ -188,47 +195,8 @@ public class Descriptor
 
         // component suffix
         String component = st.nextToken();
-
+        directory = directory != null ? directory : new File(".");
         return new Pair<Descriptor,String>(new Descriptor(version, directory, ksname, cfname, generation, temporary), component);
-    }
-
-    /**
-     * Extracts the keyspace name out of the directory name. Snapshot directories have a slightly different
-     * path structure and need to be treated differently.
-     *
-     * Regular path:   "<ksname>/<cfname>-[tmp-][<version>-]<gen>-<component>"
-     * Snapshot path: "<ksname>/snapshots/<snapshot-name>/<cfname>-[tmp-][<version>-]<gen>-<component>"
-     *
-     * @param directory a directory containing SSTables
-     * @return the keyspace name
-     */
-    public static String extractKeyspaceName(File directory)
-    {
-        if (isSnapshotInPath(directory))
-        {
-            // We need to move backwards. If this is a snapshot, first parent takes us to:
-            // <ksname>/snapshots/ and second call to parent takes us to <ksname>.
-            return directory.getParentFile().getParentFile().getName();
-        }
-        return directory.getName();
-    }
-
-    /**
-     * @param directory The directory to check
-     * @return <code>TRUE</code> if this directory represents a snapshot directory. <code>FALSE</code> otherwise.
-     */
-    private static boolean isSnapshotInPath(File directory)
-    {
-        File curDirectory = directory;
-        while (curDirectory != null)
-        {
-            if (curDirectory.getName().equals(Table.SNAPSHOT_SUBDIR_NAME))
-                return true;
-            curDirectory = curDirectory.getParentFile();
-        }
-
-        // The directory does not represent a snapshot directory.
-        return false;
     }
 
     /**
@@ -269,7 +237,17 @@ public class Descriptor
         // we could add compatibility for earlier versions with the new single-pass streaming
         // (see SSTableWriter.appendFromStream) but versions earlier than 0.7.1 don't have the
         // MessagingService version awareness anyway so there's no point.
-        return isCompatible() && version.charAt(0) >= 'f';
+        return isCompatible() && version.charAt(0) >= 'i';
+    }
+
+    /**
+     * Versions [h..hc] contained a timestamp value that was computed incorrectly, ignoring row tombstones.
+     * containsTimestamp returns true if there is a timestamp value in the metadata file; to know if it
+     * actually contains a *correct* timestamp, see tracksMaxTimestamp.
+     */
+    public boolean containsTimestamp()
+    {
+        return version.compareTo("h") >= 0;
     }
 
     @Override

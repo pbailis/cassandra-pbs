@@ -17,7 +17,7 @@
 # to run a single test, run from trunk/:
 # PYTHONPATH=test nosetests --tests=system.test_thrift_server:TestMutations.test_empty_range
 
-import os, sys, time, struct, uuid
+import os, sys, time, struct, uuid, re
 
 from . import root, ThriftTester
 from . import thrift_client as client
@@ -213,8 +213,8 @@ def _expect_exception(fn, type_):
 def _expect_missing(fn):
     _expect_exception(fn, NotFoundException)
 
-def get_range_slice(client, parent, predicate, start, end, count, cl):
-    kr = KeyRange(start, end, count=count)
+def get_range_slice(client, parent, predicate, start, end, count, cl, row_filter=None):
+    kr = KeyRange(start, end, count=count, row_filter=row_filter)
     return client.get_range_slices(parent, predicate, kr, cl)
     
 
@@ -977,7 +977,7 @@ class TestMutations(ThriftTester):
             client.insert(key, ColumnParent('Standard1'), Column(key, 'v', 0), ConsistencyLevel.ONE)
 
         def check_slices_against_keys(keyList, sliceList):
-            assert len(keyList) == len(sliceList)
+            assert len(keyList) == len(sliceList), "%d vs %d" % (len(keyList), len(sliceList))
             for key, ks in zip(keyList, sliceList):
                 assert key == ks.key
         
@@ -1215,6 +1215,16 @@ class TestMutations(ThriftTester):
     def test_describe_ring(self):
         assert list(client.describe_ring('Keyspace1'))[0].endpoints == ['127.0.0.1']
 
+    def test_describe_token_map(self):
+        # test/conf/cassandra.yaml specifies org.apache.cassandra.dht.CollatingOrderPreservingPartitioner
+        # which uses BytesToken, so this just tests that the string representation of the token	
+        # matches a regex pattern for BytesToken.toString().
+        ring = client.describe_token_map().items()
+        assert len(ring) == 1
+        token, node = ring[0]
+        assert re.match("^Token\(bytes\[[0-9A-Fa-f]{32}\]\)", token) 
+        assert node == '127.0.0.1'
+
     def test_describe_partitioner(self):
         # Make sure this just reads back the values from the config.
         assert client.describe_partitioner() == "org.apache.cassandra.dht.CollatingOrderPreservingPartitioner"
@@ -1399,13 +1409,11 @@ class TestMutations(ThriftTester):
         
         # modify valid
         modified_cf.comparator_type = 'BytesType' # revert back to old value.
-        modified_cf.row_cache_size = 25
         modified_cf.gc_grace_seconds = 1
         client.system_update_column_family(modified_cf)
         ks1 = client.describe_keyspace('Keyspace1')
         server_cf = [x for x in ks1.cf_defs if x.name=='NewColumnFamily'][0]
         assert server_cf
-        assert server_cf.row_cache_size == 25
         assert server_cf.gc_grace_seconds == 1
         
         # drop
@@ -1484,11 +1492,14 @@ class TestMutations(ThriftTester):
         client.insert('key3', ColumnParent('ToBeIndexed'), Column('birthdate', _i64(3), 0), ConsistencyLevel.ONE)
         client.insert('key3', ColumnParent('ToBeIndexed'), Column('b', _i64(3), 0), ConsistencyLevel.ONE)
 
-        # Should fail without index
+        # First without index
         cp = ColumnParent('ToBeIndexed')
         sp = SlicePredicate(slice_range=SliceRange('', ''))
-        clause = IndexClause([IndexExpression('birthdate', IndexOperator.EQ, _i64(1))], '')
-        _expect_exception(lambda: client.get_indexed_slices(cp, clause, sp, ConsistencyLevel.ONE), InvalidRequestException)
+        key_range = KeyRange('', '', None, None, [IndexExpression('birthdate', IndexOperator.EQ, _i64(1))], 100)
+        result = client.get_range_slices(cp, sp, key_range, ConsistencyLevel.ONE)
+        assert len(result) == 1, result
+        assert result[0].key == 'key1'
+        assert len(result[0].columns) == 1, result[0].columns
 
         # add an index on 'birthdate'
         ks1 = client.describe_keyspace('Keyspace1')
@@ -1507,11 +1518,8 @@ class TestMutations(ThriftTester):
         # sleep a bit to give time for the index to build.
         time.sleep(0.5)
         
-        # simple query on one index expression
-        cp = ColumnParent('ToBeIndexed')
-        sp = SlicePredicate(slice_range=SliceRange('', ''))
-        clause = IndexClause([IndexExpression('birthdate', IndexOperator.EQ, _i64(1))], '')
-        result = client.get_indexed_slices(cp, clause, sp, ConsistencyLevel.ONE)
+        # repeat query on one index expression
+        result = client.get_range_slices(cp, sp, key_range, ConsistencyLevel.ONE)
         assert len(result) == 1, result
         assert result[0].key == 'key1'
         assert len(result[0].columns) == 1, result[0].columns
@@ -1857,21 +1865,20 @@ class TestMutations(ThriftTester):
         # simple query on one index expression
         cp = ColumnParent('Indexed1')
         sp = SlicePredicate(slice_range=SliceRange('', ''))
-        clause = IndexClause([IndexExpression('birthdate', IndexOperator.EQ, _i64(1))], '')
-        result = client.get_indexed_slices(cp, clause, sp, ConsistencyLevel.ONE)
+        key_range = KeyRange('', '', None, None, [IndexExpression('birthdate', IndexOperator.EQ, _i64(1))], 100)
+        result = client.get_range_slices(cp, sp, key_range, ConsistencyLevel.ONE)
         assert len(result) == 1, result
         assert result[0].key == 'key1'
         assert len(result[0].columns) == 1, result[0].columns
 
-        # solo unindexed expression is invalid
-        clause = IndexClause([IndexExpression('b', IndexOperator.EQ, _i64(1))], '')
-        _expect_exception(lambda: client.get_indexed_slices(cp, clause, sp, ConsistencyLevel.ONE), InvalidRequestException)
+        # without index
+        key_range = KeyRange('', '', None, None, [IndexExpression('b', IndexOperator.EQ, _i64(1))], 100)
+        result = client.get_range_slices(cp, sp, key_range, ConsistencyLevel.ONE)
+        assert len(result) == 0, result
 
         # but unindexed expression added to indexed one is ok
-        clause = IndexClause([IndexExpression('b', IndexOperator.EQ, _i64(3)),
-                              IndexExpression('birthdate', IndexOperator.EQ, _i64(3))],
-                             '')
-        result = client.get_indexed_slices(cp, clause, sp, ConsistencyLevel.ONE)
+        key_range = KeyRange('', '', None, None, [IndexExpression('b', IndexOperator.EQ, _i64(3)), IndexExpression('birthdate', IndexOperator.EQ, _i64(3))], 100)
+        result = client.get_range_slices(cp, sp, key_range, ConsistencyLevel.ONE)
         assert len(result) == 1, result
         assert result[0].key == 'key3'
         assert len(result[0].columns) == 2, result[0].columns
@@ -1885,20 +1892,19 @@ class TestMutations(ThriftTester):
         client.insert('key1', ColumnParent('Indexed3'), Column(u, 'a', 0), ConsistencyLevel.ONE)
         client.insert('key1', ColumnParent('Indexed3'), Column(u2, 'b', 0), ConsistencyLevel.ONE)
         # name comparator + data validator of incompatible types -- see CASSANDRA-2347
-        clause = IndexClause([IndexExpression(u, IndexOperator.EQ, 'a'),
-                              IndexExpression(u2, IndexOperator.EQ, 'b')], '')
-        result = client.get_indexed_slices(cp, clause, sp, ConsistencyLevel.ONE)
+        key_range = KeyRange('', '', None, None, [IndexExpression(u, IndexOperator.EQ, 'a'), IndexExpression(u2, IndexOperator.EQ, 'b')], 100)
+        result = client.get_range_slices(cp, sp, key_range, ConsistencyLevel.ONE)
         assert len(result) == 1, result
 
         cp = ColumnParent('Indexed2') # timeuuid name, long values
 
         # name must be valid (TimeUUID)
-        clause = IndexClause([IndexExpression('foo', IndexOperator.EQ, uuid.UUID('00000000-0000-1000-0000-000000000000').bytes)], '')
-        _expect_exception(lambda: client.get_indexed_slices(cp, clause, sp, ConsistencyLevel.ONE), InvalidRequestException)
+        key_range = KeyRange('', '', None, None, [IndexExpression('foo', IndexOperator.EQ, uuid.UUID('00000000-0000-1000-0000-000000000000').bytes)], 100)
+        _expect_exception(lambda: client.get_range_slices(cp, sp, key_range, ConsistencyLevel.ONE), InvalidRequestException)
         
         # value must be valid (TimeUUID)
-        clause = IndexClause([IndexExpression(uuid.UUID('00000000-0000-1000-0000-000000000000').bytes, IndexOperator.EQ, "foo")], '')
-        _expect_exception(lambda: client.get_indexed_slices(cp, clause, sp, ConsistencyLevel.ONE), InvalidRequestException)
+        key_range = KeyRange('', '', None, None, [IndexExpression(uuid.UUID('00000000-0000-1000-0000-000000000000').bytes, IndexOperator.EQ, "foo")], 100)
+        _expect_exception(lambda: client.get_range_slices(cp, sp, key_range, ConsistencyLevel.ONE), InvalidRequestException)
         
     def test_index_scan_expiring(self):
         """ Test that column ttled expires from KEYS index"""
@@ -1906,13 +1912,13 @@ class TestMutations(ThriftTester):
         client.insert('key1', ColumnParent('Indexed1'), Column('birthdate', _i64(1), 0, 1), ConsistencyLevel.ONE)
         cp = ColumnParent('Indexed1')
         sp = SlicePredicate(slice_range=SliceRange('', ''))
-        clause = IndexClause([IndexExpression('birthdate', IndexOperator.EQ, _i64(1))], '')
+        key_range = KeyRange('', '', None, None, [IndexExpression('birthdate', IndexOperator.EQ, _i64(1))], 100)
         # query before expiration
-        result = client.get_indexed_slices(cp, clause, sp, ConsistencyLevel.ONE)
+        result = client.get_range_slices(cp, sp, key_range, ConsistencyLevel.ONE)
         assert len(result) == 1, result
         # wait for expiration and requery
         time.sleep(2)
-        result = client.get_indexed_slices(cp, clause, sp, ConsistencyLevel.ONE)
+        result = client.get_range_slices(cp, sp, key_range, ConsistencyLevel.ONE)
         assert len(result) == 0, result
      
     def test_column_not_found_quorum(self): 

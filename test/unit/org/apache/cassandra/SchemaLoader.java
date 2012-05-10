@@ -18,23 +18,30 @@
 
 package org.apache.cassandra;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.*;
 
-import org.apache.cassandra.db.commitlog.CommitLog;
-import org.apache.cassandra.utils.ByteBufferUtil;
 
 import com.google.common.base.Charsets;
 import org.apache.cassandra.config.*;
-import org.apache.cassandra.db.ColumnFamilyType;
+import org.apache.cassandra.db.*;
+import org.apache.cassandra.db.commitlog.CommitLog;
+import org.apache.cassandra.db.compaction.LeveledCompactionStrategy;
+import org.apache.cassandra.db.filter.QueryPath;
 import org.apache.cassandra.db.marshal.*;
+import org.apache.cassandra.gms.Gossiper;
 import org.apache.cassandra.io.compress.CompressionParameters;
 import org.apache.cassandra.io.compress.SnappyCompressor;
+import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.locator.AbstractReplicationStrategy;
 import org.apache.cassandra.locator.SimpleStrategy;
+import org.apache.cassandra.service.MigrationManager;
 import org.apache.cassandra.thrift.IndexType;
+import org.apache.cassandra.utils.ByteBufferUtil;
 
+import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,8 +51,11 @@ public class SchemaLoader
     private static Logger logger = LoggerFactory.getLogger(SchemaLoader.class);
 
     @BeforeClass
-    public static void loadSchema()
+    public static void loadSchema() throws IOException
     {
+        // Cleanup first
+        cleanupAndLeaveDirs();
+
         CommitLog.instance.allocator.enableReserveSegmentCreation();
 
         Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler()
@@ -56,14 +66,29 @@ public class SchemaLoader
             }
         });
 
+
+        // Migrations aren't happy if gossiper is not started
+        startGossiper();
         try
         {
-            Schema.instance.load(schemaDefinition(), Schema.instance.getVersion());
+            for (KSMetaData ksm : schemaDefinition())
+                MigrationManager.announceNewKeyspace(ksm);
         }
         catch (ConfigurationException e)
         {
             throw new RuntimeException(e);
         }
+    }
+
+    public static void startGossiper()
+    {
+        Gossiper.instance.start((int) (System.currentTimeMillis() / 1000));
+    }
+
+    @AfterClass
+    public static void stopGossiper()
+    {
+        Gossiper.instance.stop();
     }
 
     public static Collection<KSMetaData> schemaDefinition() throws ConfigurationException
@@ -80,7 +105,7 @@ public class SchemaLoader
         String ks_kcs = "KeyCacheSpace";
         String ks_rcs = "RowCacheSpace";
         String ks_nocommit = "NoCommitlogSpace";
-        
+
         Class<? extends AbstractReplicationStrategy> simple = SimpleStrategy.class;
 
         Map<String, String> opts_rf1 = KSMetaData.optsWithRF(1);
@@ -92,12 +117,12 @@ public class SchemaLoader
         ColumnFamilyType su = ColumnFamilyType.Super;
         AbstractType bytes = BytesType.instance;
 
-        AbstractType composite = CompositeType.getInstance(Arrays.asList(new AbstractType[]{BytesType.instance, TimeUUIDType.instance, IntegerType.instance}));
-        Map<Byte, AbstractType> aliases = new HashMap<Byte, AbstractType>();
+        AbstractType<?> composite = CompositeType.getInstance(Arrays.asList(new AbstractType<?>[]{BytesType.instance, TimeUUIDType.instance, IntegerType.instance}));
+        Map<Byte, AbstractType<?>> aliases = new HashMap<Byte, AbstractType<?>>();
         aliases.put((byte)'b', BytesType.instance);
         aliases.put((byte)'t', TimeUUIDType.instance);
-        AbstractType dynamicComposite = DynamicCompositeType.getInstance(aliases);
-      
+        AbstractType<?> dynamicComposite = DynamicCompositeType.getInstance(aliases);
+
         // these column definitions will will be applied to the jdbc utf and integer column familes respectively.
         Map<ByteBuffer, ColumnDefinition> integerColumn = new HashMap<ByteBuffer, ColumnDefinition>();
         integerColumn.put(IntegerType.instance.fromString("42"), new ColumnDefinition(
@@ -105,14 +130,20 @@ public class SchemaLoader
             UTF8Type.instance,
             null,
             null,
-            "Column42"));
+            null,
+            null));
         Map<ByteBuffer, ColumnDefinition> utf8Column = new HashMap<ByteBuffer, ColumnDefinition>();
         utf8Column.put(UTF8Type.instance.fromString("fortytwo"), new ColumnDefinition(
             UTF8Type.instance.fromString("fortytwo"),
             IntegerType.instance,
             null,
             null,
-            "Column42"));
+            null,
+            null));
+
+        // Make it easy to test leveled compaction
+        Map<String, String> leveledOptions = new HashMap<String, String>();
+        leveledOptions.put("sstable_size_in_mb", "1");
 
         // Keyspace 1
         schema.add(KSMetaData.testMetadata(ks1,
@@ -150,15 +181,13 @@ public class SchemaLoader
                                                           st,
                                                           bytes,
                                                           null)
-                                                   .defaultValidator(CounterColumnType.instance)
-                                                   .mergeShardsChance(1.0),
+                                                   .defaultValidator(CounterColumnType.instance),
                                            new CFMetaData(ks1,
                                                           "SuperCounter1",
                                                           su,
                                                           bytes,
                                                           bytes)
-                                                   .defaultValidator(CounterColumnType.instance)
-                                                   .mergeShardsChance(1.0),
+                                                   .defaultValidator(CounterColumnType.instance),
                                            superCFMD(ks1, "SuperDirectGC", BytesType.instance).gcGraceSeconds(0),
                                            jdbcCFMD(ks1, "JdbcInteger", IntegerType.instance).columnMetadata(integerColumn),
                                            jdbcCFMD(ks1, "JdbcUtf8", UTF8Type.instance).columnMetadata(utf8Column),
@@ -174,7 +203,9 @@ public class SchemaLoader
                                                           "StandardDynamicComposite",
                                                           st,
                                                           dynamicComposite,
-                                                          null)));
+                                                          null),
+                                           standardCFMD(ks1, "StandardLeveled").compactionStrategyClass(LeveledCompactionStrategy.class)
+                                                                               .compactionStrategyOptions(leveledOptions)));
 
         // Keyspace 2
         schema.add(KSMetaData.testMetadata(ks2,
@@ -239,8 +270,8 @@ public class SchemaLoader
         schema.add(KSMetaData.testMetadata(ks_rcs,
                                            simple,
                                            opts_rf1,
-                                           standardCFMD(ks_rcs, "CFWithoutCache"),
-                                           standardCFMD(ks_rcs, "CachedCF")));
+                                           standardCFMD(ks_rcs, "CFWithoutCache").caching(CFMetaData.Caching.NONE),
+                                           standardCFMD(ks_rcs, "CachedCF").caching(CFMetaData.Caching.ALL)));
 
         schema.add(KSMetaData.testMetadataNotDurable(ks_nocommit,
                                                      simple,
@@ -250,7 +281,7 @@ public class SchemaLoader
 
         if (Boolean.parseBoolean(System.getProperty("cassandra.test.compression", "false")))
             useCompression(schema);
-        
+
         return schema;
     }
 
@@ -285,11 +316,91 @@ public class SchemaLoader
                    {{
                         ByteBuffer cName = ByteBuffer.wrap("birthdate".getBytes(Charsets.UTF_8));
                         IndexType keys = withIdxType ? IndexType.KEYS : null;
-                        put(cName, new ColumnDefinition(cName, LongType.instance, keys, null, ByteBufferUtil.bytesToHex(cName)));
+                        put(cName, new ColumnDefinition(cName, LongType.instance, keys, null, withIdxType ? ByteBufferUtil.bytesToHex(cName) : null, null));
                     }});
     }
     private static CFMetaData jdbcCFMD(String ksName, String cfName, AbstractType comp)
     {
         return new CFMetaData(ksName, cfName, ColumnFamilyType.Standard, comp, null).defaultValidator(comp);
+    }
+
+    public static void cleanupAndLeaveDirs() throws IOException
+    {
+        mkdirs();
+        cleanup();
+        mkdirs();
+        CommitLog.instance.resetUnsafe(); // cleanup screws w/ CommitLog, this brings it back to safe state
+    }
+
+    public static void cleanup() throws IOException
+    {
+        // clean up commitlog
+        String[] directoryNames = { DatabaseDescriptor.getCommitLogLocation(), };
+        for (String dirName : directoryNames)
+        {
+            File dir = new File(dirName);
+            if (!dir.exists())
+                throw new RuntimeException("No such directory: " + dir.getAbsolutePath());
+            FileUtils.deleteRecursive(dir);
+        }
+
+        cleanupSavedCaches();
+
+        // clean up data directory which are stored as data directory/table/data files
+        for (String dirName : DatabaseDescriptor.getAllDataFileLocations())
+        {
+            File dir = new File(dirName);
+            if (!dir.exists())
+                throw new RuntimeException("No such directory: " + dir.getAbsolutePath());
+            FileUtils.deleteRecursive(dir);
+        }
+    }
+
+    public static void mkdirs()
+    {
+        try
+        {
+            DatabaseDescriptor.createAllDirectories();
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException(e);
+        }
+    }
+
+    protected void insertData(String keyspace, String columnFamily, int offset, int numberOfRows) throws IOException
+    {
+        for (int i = offset; i < offset + numberOfRows; i++)
+        {
+            ByteBuffer key = ByteBufferUtil.bytes("key" + i);
+            RowMutation rowMutation = new RowMutation(keyspace, key);
+            QueryPath path = new QueryPath(columnFamily, null, ByteBufferUtil.bytes("col" + i));
+
+            rowMutation.add(path, ByteBufferUtil.bytes("val" + i), System.currentTimeMillis());
+            rowMutation.applyUnsafe();
+        }
+    }
+
+    /* usually used to populate the cache */
+    protected void readData(String keyspace, String columnFamily, int offset, int numberOfRows) throws IOException
+    {
+        ColumnFamilyStore store = Table.open(keyspace).getColumnFamilyStore(columnFamily);
+        for (int i = offset; i < offset + numberOfRows; i++)
+        {
+            DecoratedKey key = Util.dk("key" + i);
+            QueryPath path = new QueryPath(columnFamily, null, ByteBufferUtil.bytes("col" + i));
+
+            store.getColumnFamily(key, path, ByteBufferUtil.EMPTY_BYTE_BUFFER, ByteBufferUtil.EMPTY_BYTE_BUFFER, false, 1);
+        }
+    }
+
+    protected static void cleanupSavedCaches()
+    {
+        File cachesDir = new File(DatabaseDescriptor.getSavedCachesLocation());
+
+        if (!cachesDir.exists() || !cachesDir.isDirectory())
+            return;
+
+        FileUtils.delete(cachesDir.listFiles());
     }
 }

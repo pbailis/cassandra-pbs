@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -45,7 +45,7 @@ import com.google.common.collect.Multimap;
  */
 public class RingCache
 {
-    final private static Logger logger_ = LoggerFactory.getLogger(RingCache.class);
+    final private static Logger logger = LoggerFactory.getLogger(RingCache.class);
 
     private final IPartitioner<?> partitioner;
     private final Configuration conf;
@@ -55,19 +55,19 @@ public class RingCache
     public RingCache(Configuration conf) throws IOException
     {
         this.conf = conf;
-        this.partitioner = ConfigHelper.getPartitioner(conf);
+        this.partitioner = ConfigHelper.getOutputPartitioner(conf);
         refreshEndpointMap();
     }
 
     public void refreshEndpointMap()
     {
             try {
-                
-                Cassandra.Client client = ConfigHelper.getClientFromAddressList(conf);
+
+                Cassandra.Client client = ConfigHelper.getClientFromOutputAddressList(conf);
 
                 List<TokenRange> ring = client.describe_ring(ConfigHelper.getOutputKeyspace(conf));
                 rangeMap = ArrayListMultimap.create();
-                
+
                 for (TokenRange range : ring)
                 {
                     Token<?> left = partitioner.getTokenFactory().fromString(range.start_token);
@@ -96,7 +96,7 @@ public class RingCache
             }
             catch (TException e)
             {
-                logger_.debug("Error contacting seed list" + ConfigHelper.getInitialAddress(conf) + " " + e.getMessage());
+                logger.debug("Error contacting seed list" + ConfigHelper.getOutputInitialAddress(conf) + " " + e.getMessage());
             }
         }
 

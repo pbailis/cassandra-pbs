@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.tools;
 
 import java.io.File;
@@ -25,13 +24,10 @@ import java.nio.ByteBuffer;
 import java.util.*;
 
 import org.apache.cassandra.config.CFMetaData;
-import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.config.Schema;
 import org.apache.cassandra.db.*;
-import org.apache.cassandra.db.index.keys.KeysIndex;
 import org.apache.cassandra.db.marshal.AbstractType;
-import org.apache.cassandra.service.StorageService;
 
 import org.apache.commons.cli.*;
 
@@ -50,19 +46,17 @@ import static org.apache.cassandra.utils.ByteBufferUtil.hexToBytes;
  */
 public class SSTableExport
 {
-    private static ObjectMapper jsonMapper = new ObjectMapper();
+    private static final ObjectMapper jsonMapper = new ObjectMapper();
 
     private static final String KEY_OPTION = "k";
     private static final String EXCLUDEKEY_OPTION = "x";
     private static final String ENUMERATEKEYS_OPTION = "e";
 
-    private static Options options;
+    private static final Options options = new Options();
     private static CommandLine cmd;
-    
+
     static
     {
-        options = new Options();
-
         Option optKey = new Option(KEY_OPTION, true, "Row key");
         // Number of times -k <key> can be passed on the command line.
         optKey.setArgs(500);
@@ -100,7 +94,7 @@ public class SSTableExport
      * @param comparator columns comparator
      * @param cfMetaData Column Family metadata (to get validator)
      */
-    private static void serializeColumns(Iterator<IColumn> columns, PrintStream out, AbstractType comparator, CFMetaData cfMetaData)
+    private static void serializeColumns(Iterator<IColumn> columns, PrintStream out, AbstractType<?> comparator, CFMetaData cfMetaData)
     {
         while (columns.hasNext())
         {
@@ -120,7 +114,7 @@ public class SSTableExport
      *
      * @return column as serialized list
      */
-    private static List<Object> serializeColumn(IColumn column, AbstractType comparator, CFMetaData cfMetaData)
+    private static List<Object> serializeColumn(IColumn column, AbstractType<?> comparator, CFMetaData cfMetaData)
     {
         ArrayList<Object> serializedColumn = new ArrayList<Object>();
 
@@ -134,7 +128,7 @@ public class SSTableExport
         }
         else
         {
-            AbstractType validator = cfMetaData.getValueValidator(name);
+            AbstractType<?> validator = cfMetaData.getValueValidator(name);
             serializedColumn.add(validator.getString(value));
         }
         serializedColumn.add(column.timestamp());
@@ -169,7 +163,7 @@ public class SSTableExport
         ColumnFamily columnFamily = row.getColumnFamily();
         boolean isSuperCF = columnFamily.isSuper();
         CFMetaData cfMetaData = columnFamily.metadata();
-        AbstractType comparator = columnFamily.getComparator();
+        AbstractType<?> comparator = columnFamily.getComparator();
 
         writeKey(out, bytesToHex(key.key));
         out.print(isSuperCF ? "{" : "[");
@@ -206,7 +200,7 @@ public class SSTableExport
 
     /**
      * Enumerate row keys from an SSTableReader and write the result to a PrintStream.
-     * 
+     *
      * @param ssTableFile the file to export the rows from
      * @param outs PrintStream to write the output to
      * @throws IOException on failure to read/write input/output
@@ -234,7 +228,7 @@ public class SSTableExport
 
     /**
      * Export specific rows from an SSTable and write the resulting JSON to a PrintStream.
-     * 
+     *
      * @param ssTableFile the SSTableScanner to export the rows from
      * @param outs PrintStream to write the output to
      * @param toExport the keys corresponding to the rows to export
@@ -246,7 +240,7 @@ public class SSTableExport
         SSTableReader reader = SSTableReader.open(Descriptor.fromFilename(ssTableFile));
         SSTableScanner scanner = reader.getDirectScanner();
 
-        IPartitioner<?> partitioner = StorageService.getPartitioner();
+        IPartitioner<?> partitioner = reader.partitioner;
 
         if (excludes != null)
             toExport.removeAll(Arrays.asList(excludes));
@@ -329,10 +323,10 @@ public class SSTableExport
 
         scanner.close();
     }
-    
+
     /**
      * Export an SSTable and write the resulting JSON to a PrintStream.
-     * 
+     *
      * @param ssTableFile the SSTable to export
      * @param outs PrintStream to write the output to
      * @param excludes keys to exclude from export
@@ -341,28 +335,12 @@ public class SSTableExport
      */
     public static void export(String ssTableFile, PrintStream outs, String[] excludes) throws IOException
     {
-        Descriptor descriptor = Descriptor.fromFilename(ssTableFile);
-        CFMetaData metadata;
-        if (descriptor.cfname.contains("."))
-        {
-            // look up index metadata from parent
-            int i = descriptor.cfname.indexOf(".");
-            String parentName = descriptor.cfname.substring(0, i);
-            CFMetaData parent = Schema.instance.getCFMetaData(descriptor.ksname, parentName);
-            ColumnDefinition def = parent.getColumnDefinitionForIndex(descriptor.cfname.substring(i + 1));
-            metadata = CFMetaData.newIndexMetadata(parent, def, KeysIndex.indexComparator());
-        }
-        else
-        {
-            metadata = Schema.instance.getCFMetaData(descriptor.ksname, descriptor.cfname);
-        }
-
-        export(SSTableReader.open(descriptor, metadata), outs, excludes);
+        export(SSTableReader.open(Descriptor.fromFilename(ssTableFile)), outs, excludes);
     }
 
     /**
      * Export an SSTable and write the resulting JSON to standard out.
-     * 
+     *
      * @param ssTableFile SSTable to export
      * @param excludes keys to exclude from export
      *
@@ -376,7 +354,7 @@ public class SSTableExport
     /**
      * Given arguments specifying an SSTable, and optionally an output file,
      * export the contents of the SSTable to JSON.
-     *  
+     *
      * @param args command lines arguments
      *
      * @throws IOException on failure to open/read/write files or output streams
@@ -385,7 +363,7 @@ public class SSTableExport
     public static void main(String[] args) throws IOException, ConfigurationException
     {
         String usage = String.format("Usage: %s <sstable> [-k key [-k key [...]] -x key [-x key [...]]]%n", SSTableExport.class.getName());
-        
+
         CommandLineParser parser = new PosixParser();
         try
         {
@@ -405,7 +383,7 @@ public class SSTableExport
             System.err.println(usage);
             System.exit(1);
         }
-        
+
 
         String[] keys = cmd.getOptionValues(KEY_OPTION);
         String[] excludes = cmd.getOptionValues(EXCLUDEKEY_OPTION);

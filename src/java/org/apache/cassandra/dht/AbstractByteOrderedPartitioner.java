@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.dht;
 
 import java.math.BigInteger;
@@ -38,14 +37,14 @@ public abstract class AbstractByteOrderedPartitioner extends AbstractPartitioner
 
     public static final BigInteger BYTE_MASK = new BigInteger("255");
 
-    public DecoratedKey<BytesToken> decorateKey(ByteBuffer key)
+    public DecoratedKey decorateKey(ByteBuffer key)
     {
-        return new DecoratedKey<BytesToken>(getToken(key), key);
+        return new DecoratedKey(getToken(key), key);
     }
 
-    public DecoratedKey<BytesToken> convertFromDiskFormat(ByteBuffer key)
+    public DecoratedKey convertFromDiskFormat(ByteBuffer key)
     {
-        return new DecoratedKey<BytesToken>(getToken(key), key);
+        return new DecoratedKey(getToken(key), key);
     }
 
     public BytesToken midpoint(Token ltoken, Token rtoken)
@@ -89,7 +88,6 @@ public abstract class AbstractByteOrderedPartitioner extends AbstractPartitioner
     private BigInteger bigForBytes(ByteBuffer bytes, int sigbytes)
     {
         byte[] b = new byte[sigbytes];
-        Arrays.fill(b, (byte) 0); // append zeros
         ByteBufferUtil.arrayCopy(bytes, bytes.position(), b, 0, bytes.remaining());
         return new BigInteger(1, b);
     }
@@ -150,6 +148,8 @@ public abstract class AbstractByteOrderedPartitioner extends AbstractPartitioner
         {
             try
             {
+                if (token.length() % 2 == 1)
+                    token = "0" + token;
                 Hex.hexToBytes(token);
             }
             catch (NumberFormatException e)
@@ -160,6 +160,8 @@ public abstract class AbstractByteOrderedPartitioner extends AbstractPartitioner
 
         public Token<byte[]> fromString(String string)
         {
+            if (string.length() % 2 == 1)
+                string = "0" + string;
             return new BytesToken(Hex.hexToBytes(string));
         }
     };
@@ -180,7 +182,7 @@ public abstract class AbstractByteOrderedPartitioner extends AbstractPartitioner
     {
         // allTokens will contain the count and be returned, sorted_ranges is shorthand for token<->token math.
         Map<Token, Float> allTokens = new HashMap<Token, Float>();
-        List<Range<Token>> sortedRanges = new ArrayList<Range<Token>>();
+        List<Range<Token>> sortedRanges = new ArrayList<Range<Token>>(sortedTokens.size());
 
         // this initializes the counts to 0 and calcs the ranges in order.
         Token lastToken = sortedTokens.get(sortedTokens.size() - 1);

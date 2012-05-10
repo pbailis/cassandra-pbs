@@ -1,5 +1,4 @@
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -7,18 +6,15 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-
 package org.apache.cassandra.io.sstable;
 
 import java.io.File;
@@ -54,14 +50,16 @@ public class Component
         // statistical metadata about the content of the sstable
         STATS("Statistics.db"),
         // holds sha1 sum of the data file (to be checked by sha1sum)
-        DIGEST("Digest.sha1");
+        DIGEST("Digest.sha1"),
+        // holds SSTable Index Summary and Boundaries
+        SUMMARY("Summary.db");
 
         final String repr;
         Type(String repr)
         {
             this.repr = repr;
         }
-        
+
         static Type fromRepresentation(String repr)
         {
             for (Type type : TYPES)
@@ -79,6 +77,7 @@ public class Component
     public final static Component COMPRESSION_INFO = new Component(Type.COMPRESSION_INFO, -1);
     public final static Component STATS = new Component(Type.STATS, -1);
     public final static Component DIGEST = new Component(Type.DIGEST, -1);
+    public final static Component SUMMARY = new Component(Type.SUMMARY, -1);
 
     public final Type type;
     public final int id;
@@ -126,6 +125,7 @@ public class Component
             case COMPRESSION_INFO:  component = Component.COMPRESSION_INFO; break;
             case STATS:             component = Component.STATS;            break;
             case DIGEST:            component = Component.DIGEST;           break;
+            case SUMMARY:           component = Component.SUMMARY;          break;
             default:
                  throw new IllegalStateException();
         }

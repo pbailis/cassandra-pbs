@@ -1,24 +1,21 @@
-package org.apache.cassandra.db.compaction;
 /*
-*
-* Licensed to the Apache Software Foundation (ASF) under one
-* or more contributor license agreements.  See the NOTICE file
-* distributed with this work for additional information
-* regarding copyright ownership.  The ASF licenses this file
-* to you under the Apache License, Version 2.0 (the
-* "License"); you may not use this file except in compliance
-* with the License.  You may obtain a copy of the License at
-*
-*   http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing,
-* software distributed under the License is distributed on an
-* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-* KIND, either express or implied.  See the License for the
-* specific language governing permissions and limitations
-* under the License.
-*
-*/
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.apache.cassandra.db.compaction;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -40,7 +37,6 @@ import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.columniterator.ICountableColumnIterator;
 import org.apache.cassandra.io.sstable.SSTableIdentityIterator;
 import org.apache.cassandra.io.sstable.SSTableReader;
-import org.apache.cassandra.io.sstable.SSTableScanner;
 import org.apache.cassandra.utils.*;
 
 /**
@@ -57,32 +53,25 @@ import org.apache.cassandra.utils.*;
  */
 public class ParallelCompactionIterable extends AbstractCompactionIterable
 {
-    private static Logger logger = LoggerFactory.getLogger(ParallelCompactionIterable.class);
+    private static final Logger logger = LoggerFactory.getLogger(ParallelCompactionIterable.class);
 
-    private final List<SSTableScanner> scanners;
     private final int maxInMemorySize;
 
-    public ParallelCompactionIterable(OperationType type, Iterable<SSTableReader> sstables, CompactionController controller) throws IOException
+    public ParallelCompactionIterable(OperationType type, List<ICompactionScanner> scanners, CompactionController controller) throws IOException
     {
-        this(type, getScanners(sstables), controller, DatabaseDescriptor.getInMemoryCompactionLimit() / Iterables.size(sstables));
+        this(type, scanners, controller, DatabaseDescriptor.getInMemoryCompactionLimit() / scanners.size());
     }
 
-    public ParallelCompactionIterable(OperationType type, Iterable<SSTableReader> sstables, CompactionController controller, int maxInMemorySize) throws IOException
+    public ParallelCompactionIterable(OperationType type, List<ICompactionScanner> scanners, CompactionController controller, int maxInMemorySize)
     {
-        this(type, getScanners(sstables), controller, maxInMemorySize);
-    }
-
-    protected ParallelCompactionIterable(OperationType type, List<SSTableScanner> scanners, CompactionController controller, int maxInMemorySize)
-    {
-        super(controller, type);
-        this.scanners = scanners;
+        super(controller, type, scanners);
         this.maxInMemorySize = maxInMemorySize;
     }
 
     public CloseableIterator<AbstractCompactedRow> iterator()
     {
-        List<CloseableIterator<RowContainer>> sources = new ArrayList<CloseableIterator<RowContainer>>();
-        for (SSTableScanner scanner : scanners)
+        List<CloseableIterator<RowContainer>> sources = new ArrayList<CloseableIterator<RowContainer>>(scanners.size());
+        for (ICompactionScanner scanner : scanners)
             sources.add(new Deserializer(scanner, maxInMemorySize));
         return new Unwrapper(MergeIterator.get(sources, RowContainer.comparator, new Reducer()), controller);
     }
@@ -130,7 +119,7 @@ public class ParallelCompactionIterable extends AbstractCompactionIterable
                 // If the raw is cached, we call removeDeleted on it to have/ coherent query returns. However it would look
                 // like some deleted columns lived longer than gc_grace + compaction. This can also free up big amount of
                 // memory on long running instances
-                controller.removeDeletedInCache(compactedRow.key);
+                controller.invalidateCachedRow(compactedRow.key);
                 return compactedRow;
             }
         }
@@ -166,10 +155,10 @@ public class ParallelCompactionIterable extends AbstractCompactionIterable
             if ((row++ % 1000) == 0)
             {
                 long n = 0;
-                for (SSTableScanner scanner : scanners)
-                    n += scanner.getFilePointer();
+                for (ICompactionScanner scanner : scanners)
+                    n += scanner.getCurrentPosition();
                 bytesRead = n;
-                throttle.throttle(bytesRead);
+                controller.mayThrottle(bytesRead);
             }
             return compacted;
         }
@@ -189,10 +178,15 @@ public class ParallelCompactionIterable extends AbstractCompactionIterable
             if (inMemory)
                 return new CompactedRowContainer(rows.get(0).getKey(), executor.submit(new MergeTask(new ArrayList<RowContainer>(rows))));
 
-            List<ICountableColumnIterator> iterators = new ArrayList<ICountableColumnIterator>();
+            List<ICountableColumnIterator> iterators = new ArrayList<ICountableColumnIterator>(rows.size());
             for (RowContainer container : rows)
                 iterators.add(container.row == null ? container.wrapper : new DeserializedColumnIterator(container.row));
             return new CompactedRowContainer(new LazilyCompactedRow(controller, iterators));
+        }
+
+        public void close()
+        {
+            executor.shutdown();
         }
 
         private class MergeTask implements Callable<ColumnFamily>
@@ -280,9 +274,9 @@ public class ParallelCompactionIterable extends AbstractCompactionIterable
         private final LinkedBlockingQueue<RowContainer> queue = new LinkedBlockingQueue<RowContainer>(1);
         private static final RowContainer finished = new RowContainer((Row) null);
         private Condition condition;
-        private final SSTableScanner scanner;
+        private final ICompactionScanner scanner;
 
-        public Deserializer(SSTableScanner ssts, final int maxInMemorySize)
+        public Deserializer(ICompactionScanner ssts, final int maxInMemorySize)
         {
             this.scanner = ssts;
             Runnable runnable = new WrappedRunnable()
@@ -315,7 +309,7 @@ public class ParallelCompactionIterable extends AbstractCompactionIterable
                     }
                 }
             };
-            new Thread(runnable, "Deserialize " + scanner.sstable).start();
+            new Thread(runnable, "Deserialize " + scanner.getBackingFiles()).start();
         }
 
         protected RowContainer computeNext()

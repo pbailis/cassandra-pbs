@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -26,7 +26,7 @@ import org.apache.commons.cli.*;
  */
 public class CliOptions
 {
-    private static CLIOptions options = null; // Info about command line options
+    private static final CLIOptions options; // Info about command line options
 
     // Name of the command line tool (used for error messages)
     private static final String TOOL_NAME = "cassandra-cli";
@@ -47,6 +47,7 @@ public class CliOptions
     private static final String SCHEMA_MIGRATION_WAIT_TIME = "schema-mwt";
 
     // Default values for optional command line arguments
+    private static final String DEFAULT_HOST        = "127.0.0.1";
     private static final int    DEFAULT_THRIFT_PORT = 9160;
 
     // Register the command line options and their properties (such as
@@ -91,10 +92,7 @@ public class CliOptions
             }
             else
             {
-                // host name not specified in command line.
-                // In this case, we don't implicitly connect at CLI startup. In this case,
-                // the user must use the "connect" CLI statement to connect.
-                css.hostName = null;
+                css.hostName = DEFAULT_HOST;
             }
 
             // Look to see if frame has been specified
@@ -122,7 +120,7 @@ public class CliOptions
             // Look for authentication credentials (username and password)
             if (cmd.hasOption(USERNAME_OPTION))
             {
-            	css.username = cmd.getOptionValue(USERNAME_OPTION);
+                css.username = cmd.getOptionValue(USERNAME_OPTION);
             }
             else
             {
@@ -131,7 +129,7 @@ public class CliOptions
 
             if (cmd.hasOption(PASSWORD_OPTION))
             {
-            	css.password = cmd.getOptionValue(PASSWORD_OPTION);
+                css.password = cmd.getOptionValue(PASSWORD_OPTION);
             }
             else
             {
@@ -141,7 +139,7 @@ public class CliOptions
             // Look for keyspace
             if (cmd.hasOption(KEYSPACE_OPTION))
             {
-            	css.keyspace = cmd.getOptionValue(KEYSPACE_OPTION);
+                css.keyspace = cmd.getOptionValue(KEYSPACE_OPTION);
             }
 
             if (cmd.hasOption(BATCH_OPTION))
@@ -173,10 +171,6 @@ public class CliOptions
             if (cmd.hasOption(SCHEMA_MIGRATION_WAIT_TIME))
             {
                 css.schema_mwt = Integer.parseInt(cmd.getOptionValue(SCHEMA_MIGRATION_WAIT_TIME)) * 1000;
-            }
-            else
-            {
-                css.schema_mwt = 10 * 1000;
             }
 
             // Abort if there are any unrecognized arguments left

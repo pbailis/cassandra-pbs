@@ -1,6 +1,4 @@
-package org.apache.cassandra.streaming;
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,23 +6,22 @@ package org.apache.cassandra.streaming;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-
+package org.apache.cassandra.streaming;
 
 import java.io.*;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.sstable.Descriptor;
 import org.apache.cassandra.io.sstable.SSTableReader;
@@ -36,12 +33,7 @@ import org.apache.cassandra.utils.Pair;
  */
 public class PendingFile
 {
-    private static PendingFileSerializer serializer_ = new PendingFileSerializer();
-
-    public static PendingFileSerializer serializer()
-    {
-        return serializer_;
-    }
+    public static final PendingFileSerializer serializer = new PendingFileSerializer();
 
     // NB: this reference is used to be able to release the acquired reference upon completion
     public final SSTableReader sstable;
@@ -63,7 +55,7 @@ public class PendingFile
     {
         this(sstable, desc, component, sections, type, 0);
     }
-    
+
     public PendingFile(SSTableReader sstable, Descriptor desc, String component, List<Pair<Long,Long>> sections, OperationType type, long estimatedKeys)
     {
         this.sstable = sstable;
@@ -86,7 +78,7 @@ public class PendingFile
     {
         return desc.filenameFor(component);
     }
-    
+
     public boolean equals(Object o)
     {
         if ( !(o instanceof PendingFile) )
@@ -134,14 +126,14 @@ public class PendingFile
             String filename = dis.readUTF();
             if (filename.isEmpty())
                 return null;
-            
+
             Descriptor desc = Descriptor.fromFilename(filename);
             String component = dis.readUTF();
             int count = dis.readInt();
             List<Pair<Long,Long>> sections = new ArrayList<Pair<Long,Long>>(count);
             for (int i = 0; i < count; i++)
                 sections.add(new Pair<Long,Long>(Long.valueOf(dis.readLong()), Long.valueOf(dis.readLong())));
-            // this controls the way indexes are rebuilt when streaming in.  
+            // this controls the way indexes are rebuilt when streaming in.
             OperationType type = OperationType.RESTORE_REPLICA_COUNT;
             if (version > MessagingService.VERSION_07)
                 type = OperationType.valueOf(dis.readUTF());
@@ -151,9 +143,21 @@ public class PendingFile
             return new PendingFile(null, desc, component, sections, type, estimatedKeys);
         }
 
-        public long serializedSize(PendingFile pendingFile, int version)
+        public long serializedSize(PendingFile pf, int version)
         {
-            throw new UnsupportedOperationException();
+            if (pf == null)
+                return TypeSizes.NATIVE.sizeof(0);
+
+            long size = TypeSizes.NATIVE.sizeof(pf.desc.filenameFor(pf.component));
+            size += TypeSizes.NATIVE.sizeof(pf.component);
+            size += TypeSizes.NATIVE.sizeof(pf.sections.size());
+            for (Pair<Long,Long> section : pf.sections)
+                size += TypeSizes.NATIVE.sizeof(section.left + TypeSizes.NATIVE.sizeof(section.right));
+            if (version > MessagingService.VERSION_07)
+                size += TypeSizes.NATIVE.sizeof(pf.type.name());
+            if (version > MessagingService.VERSION_080)
+                size += TypeSizes.NATIVE.sizeof(pf.estimatedKeys);
+            return size;
         }
     }
 }

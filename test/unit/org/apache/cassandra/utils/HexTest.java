@@ -42,11 +42,11 @@ public class HexTest
     {
         String[] values = new String[]
         {
-            "0",
+            "00",
             "10",
-            "100",
-            "101",
-            "f",
+            "0100",
+            "0101",
+            "0f",
             "ff"
         };
         byte[][] expected = new byte[][]
@@ -58,7 +58,7 @@ public class HexTest
             new byte[] { 0x0f },
             new byte[] { (byte)0x000000ff }
         };
-        
+
         for (int i = 0; i < values.length; i++)
             assert Arrays.equals(Hex.hexToBytes(values[i]), expected[i]);
     }

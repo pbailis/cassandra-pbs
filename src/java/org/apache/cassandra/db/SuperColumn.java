@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.db;
 
 import java.io.DataInput;
@@ -25,6 +24,9 @@ import java.nio.ByteBuffer;
 import java.security.MessageDigest;
 import java.util.Collection;
 import java.util.Comparator;
+
+import com.google.common.base.Objects;
+import com.google.common.collect.Iterables;
 
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.marshal.AbstractType;
@@ -39,8 +41,8 @@ import org.cliffc.high_scale_lib.NonBlockingHashMap;
 
 public class SuperColumn extends AbstractColumnContainer implements IColumn
 {
-    private static NonBlockingHashMap<Comparator, SuperColumnSerializer> serializers = new NonBlockingHashMap<Comparator, SuperColumnSerializer>();
-    public static SuperColumnSerializer serializer(AbstractType comparator)
+    private static final NonBlockingHashMap<Comparator, SuperColumnSerializer> serializers = new NonBlockingHashMap<Comparator, SuperColumnSerializer>();
+    public static SuperColumnSerializer serializer(AbstractType<?> comparator)
     {
         SuperColumnSerializer serializer = serializers.get(comparator);
         if (serializer == null)
@@ -51,9 +53,9 @@ public class SuperColumn extends AbstractColumnContainer implements IColumn
         return serializer;
     }
 
-    private ByteBuffer name;
+    private final ByteBuffer name;
 
-    public SuperColumn(ByteBuffer name, AbstractType comparator)
+    public SuperColumn(ByteBuffer name, AbstractType<?> comparator)
     {
         this(name, AtomicSortedColumns.factory().create(comparator, false));
     }
@@ -100,12 +102,12 @@ public class SuperColumn extends AbstractColumnContainer implements IColumn
     /**
      * This calculates the exact size of the sub columns on the fly
      */
-    public int size()
+    public int size(TypeSizes typeSizes)
     {
         int size = 0;
         for (IColumn subColumn : getSubColumns())
         {
-            size += subColumn.serializedSize();
+            size += subColumn.serializedSize(typeSizes);
         }
         return size;
     }
@@ -114,18 +116,30 @@ public class SuperColumn extends AbstractColumnContainer implements IColumn
      * This returns the size of the super-column when serialized.
      * @see org.apache.cassandra.db.IColumn#serializedSize()
     */
-    public int serializedSize()
+    public int serializedSize(TypeSizes typeSizes)
     {
-    	/*
-    	 * We need to keep the way we are calculating the column size in sync with the
-    	 * way we are calculating the size for the column family serializer.
-    	 */
-      return DBConstants.shortSize + name.remaining() + DBConstants.intSize + DBConstants.longSize + DBConstants.intSize + size();
+        /*
+         * We need to keep the way we are calculating the column size in sync with the
+         * way we are calculating the size for the column family serializer.
+         *
+         * 2 bytes for name size
+         * n bytes for the name
+         * 4 bytes for getLocalDeletionTime
+         * 8 bytes for getMarkedForDeleteAt
+         * 4 bytes for the subcolumns size
+         * size(constantSize) of subcolumns.
+         */
+        int nameSize = name.remaining();
+        int subColumnsSize = size(typeSizes);
+        return typeSizes.sizeof((short) nameSize) + nameSize
+                + typeSizes.sizeof(getLocalDeletionTime())
+                + typeSizes.sizeof(getMarkedForDeleteAt())
+                + typeSizes.sizeof(subColumnsSize) + subColumnsSize;
     }
 
     public long timestamp()
     {
-    	throw new UnsupportedOperationException("This operation is not supported for Super Columns.");
+        throw new UnsupportedOperationException("This operation is not supported for Super Columns.");
     }
 
     public long maxTimestamp()
@@ -149,9 +163,22 @@ public class SuperColumn extends AbstractColumnContainer implements IColumn
         return max;
     }
 
+    public long mostRecentNonGCableChangeAt(int gcbefore)
+    {
+        long max = Long.MIN_VALUE;
+        for (IColumn column : getSubColumns())
+        {
+            if (column.getLocalDeletionTime() >= gcbefore && column.timestamp() > max)
+            {
+                max = column.timestamp();
+            }
+        }
+        return max;
+    }
+
     public ByteBuffer value()
     {
-    	throw new UnsupportedOperationException("This operation is not supported for Super Columns.");
+        throw new UnsupportedOperationException("This operation is not supported for Super Columns.");
     }
 
     @Override
@@ -169,14 +196,14 @@ public class SuperColumn extends AbstractColumnContainer implements IColumn
     {
         for (IColumn subColumn : column.getSubColumns())
         {
-        	addColumn(subColumn, allocator);
+            addColumn(subColumn, allocator);
         }
         delete(column);
     }
 
     public IColumn diff(IColumn columnNew)
     {
-    	IColumn columnDiff = new SuperColumn(columnNew.name(), ((SuperColumn)columnNew).getComparator());
+        IColumn columnDiff = new SuperColumn(columnNew.name(), ((SuperColumn)columnNew).getComparator());
         if (columnNew.getMarkedForDeleteAt() > getMarkedForDeleteAt())
         {
             ((SuperColumn)columnDiff).delete(columnNew.getLocalDeletionTime(), columnNew.getMarkedForDeleteAt());
@@ -187,25 +214,25 @@ public class SuperColumn extends AbstractColumnContainer implements IColumn
         // takes care of those for us.)
         for (IColumn subColumn : columnNew.getSubColumns())
         {
-        	IColumn columnInternal = columns.getColumn(subColumn.name());
-        	if(columnInternal == null )
-        	{
-        		columnDiff.addColumn(subColumn);
-        	}
-        	else
-        	{
-            	IColumn subColumnDiff = columnInternal.diff(subColumn);
-        		if(subColumnDiff != null)
-        		{
-            		columnDiff.addColumn(subColumnDiff);
-        		}
-        	}
+            IColumn columnInternal = columns.getColumn(subColumn.name());
+            if(columnInternal == null )
+            {
+                columnDiff.addColumn(subColumn);
+            }
+            else
+            {
+                IColumn subColumnDiff = columnInternal.diff(subColumn);
+                if(subColumnDiff != null)
+                {
+                    columnDiff.addColumn(subColumnDiff);
+                }
+            }
         }
 
         if (!columnDiff.getSubColumns().isEmpty() || columnNew.isMarkedForDelete())
-        	return columnDiff;
+            return columnDiff;
         else
-        	return null;
+            return null;
     }
 
     public void updateDigest(MessageDigest digest)
@@ -228,11 +255,11 @@ public class SuperColumn extends AbstractColumnContainer implements IColumn
         }
     }
 
-    public String getString(AbstractType comparator)
+    public String getString(AbstractType<?> comparator)
     {
-    	StringBuilder sb = new StringBuilder();
+        StringBuilder sb = new StringBuilder();
         sb.append("SuperColumn(");
-    	sb.append(comparator.getString(name));
+        sb.append(comparator.getString(name));
 
         if (isMarkedForDelete()) {
             sb.append(" -delete at ").append(getMarkedForDeleteAt()).append("-");
@@ -293,18 +320,43 @@ public class SuperColumn extends AbstractColumnContainer implements IColumn
             column.validateFields(metadata);
         }
     }
+
+    @Override
+    public boolean equals(Object o)
+    {
+        if (this == o)
+            return true;
+        if (o == null || getClass() != o.getClass())
+            return false;
+
+        SuperColumn sc = (SuperColumn)o;
+
+        if (!name.equals(sc.name))
+            return false;
+        if (getMarkedForDeleteAt() != sc.getMarkedForDeleteAt())
+            return false;
+        if (getLocalDeletionTime() != sc.getLocalDeletionTime())
+            return false;
+        return Iterables.elementsEqual(columns, sc.columns);
+    }
+
+    @Override
+    public int hashCode()
+    {
+        return Objects.hashCode(name, getMarkedForDeleteAt(), getLocalDeletionTime(), columns);
+    }
 }
 
 class SuperColumnSerializer implements IColumnSerializer
 {
-    private AbstractType comparator;
+    private final AbstractType<?> comparator;
 
-    public SuperColumnSerializer(AbstractType comparator)
+    public SuperColumnSerializer(AbstractType<?> comparator)
     {
         this.comparator = comparator;
     }
 
-    public AbstractType getComparator()
+    public AbstractType<?> getComparator()
     {
         return comparator;
     }
@@ -360,8 +412,8 @@ class SuperColumnSerializer implements IColumnSerializer
         return superColumn;
     }
 
-    public long serializedSize(IColumn object)
+    public long serializedSize(IColumn object, TypeSizes typeSizes)
     {
-        return object.serializedSize();
+        return object.serializedSize(typeSizes);
     }
 }

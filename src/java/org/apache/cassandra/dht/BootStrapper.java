@@ -1,4 +1,4 @@
- /**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,52 +15,41 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.dht;
 
- import java.io.IOException;
- import java.net.InetAddress;
- import java.util.*;
- import java.util.concurrent.CountDownLatch;
- import java.util.concurrent.TimeUnit;
- import java.util.concurrent.locks.Condition;
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
+import java.net.InetAddress;
+import java.util.*;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Condition;
 
- import com.google.common.base.Charsets;
- import com.google.common.collect.ArrayListMultimap;
- import com.google.common.collect.HashMultimap;
- import com.google.common.collect.Multimap;
- import org.apache.cassandra.config.Schema;
- import org.apache.cassandra.gms.Gossiper;
- import org.apache.commons.lang.ArrayUtils;
- import org.apache.commons.lang.StringUtils;
- import org.slf4j.Logger;
- import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
- import org.apache.cassandra.config.ConfigurationException;
- import org.apache.cassandra.config.DatabaseDescriptor;
- import org.apache.cassandra.db.Table;
- import org.apache.cassandra.gms.FailureDetector;
- import org.apache.cassandra.gms.IFailureDetector;
- import org.apache.cassandra.locator.AbstractReplicationStrategy;
- import org.apache.cassandra.locator.TokenMetadata;
- import org.apache.cassandra.net.IAsyncCallback;
- import org.apache.cassandra.net.IVerbHandler;
- import org.apache.cassandra.net.Message;
- import org.apache.cassandra.net.MessagingService;
- import org.apache.cassandra.service.StorageService;
- import org.apache.cassandra.streaming.OperationType;
- import org.apache.cassandra.streaming.StreamIn;
- import org.apache.cassandra.utils.FBUtilities;
- import org.apache.cassandra.utils.SimpleCondition;
-
+import org.apache.cassandra.config.ConfigurationException;
+import org.apache.cassandra.config.DatabaseDescriptor;
+import org.apache.cassandra.config.Schema;
+import org.apache.cassandra.db.Table;
+import org.apache.cassandra.db.TypeSizes;
+import org.apache.cassandra.gms.FailureDetector;
+import org.apache.cassandra.io.IVersionedSerializer;
+import org.apache.cassandra.locator.AbstractReplicationStrategy;
+import org.apache.cassandra.locator.TokenMetadata;
+import org.apache.cassandra.net.*;
+import org.apache.cassandra.service.StorageService;
+import org.apache.cassandra.streaming.OperationType;
+import org.apache.cassandra.utils.FBUtilities;
+import org.apache.cassandra.utils.SimpleCondition;
 
 public class BootStrapper
 {
     private static final Logger logger = LoggerFactory.getLogger(BootStrapper.class);
 
-    /* endpoints that need to be bootstrapped */
+    /* endpoint that needs to be bootstrapped */
     protected final InetAddress address;
-    /* tokens of the nodes being bootstrapped. */
+    /* token of the node being bootstrapped. */
     protected final Token<?> token;
     protected final TokenMetadata tokenMetadata;
     private static final long BOOTSTRAP_TIMEOUT = 30000; // default bootstrap timeout of 30s
@@ -80,52 +69,17 @@ public class BootStrapper
         if (logger.isDebugEnabled())
             logger.debug("Beginning bootstrap process");
 
-        final Multimap<String, Map.Entry<InetAddress, Collection<Range<Token>>>> rangesToFetch = HashMultimap.create();
+        RangeStreamer streamer = new RangeStreamer(tokenMetadata, address, OperationType.BOOTSTRAP);
+        streamer.addSourceFilter(new RangeStreamer.FailureDetectorSourceFilter(FailureDetector.instance));
 
-        int requests = 0;
         for (String table : Schema.instance.getNonSystemTables())
         {
-            Map<InetAddress, Collection<Range<Token>>> workMap = getWorkMap(getRangesWithSources(table)).asMap();
-            for (Map.Entry<InetAddress, Collection<Range<Token>>> entry : workMap.entrySet())
-            {
-                requests++;
-                rangesToFetch.put(table, entry);
-            }
+            AbstractReplicationStrategy strategy = Table.open(table).getReplicationStrategy();
+            streamer.addRanges(table, strategy.getPendingAddressRanges(tokenMetadata, token, address));
         }
 
-        final CountDownLatch latch = new CountDownLatch(requests);
-        for (final String table : rangesToFetch.keySet())
-        {
-            /* Send messages to respective folks to stream data over to me */
-            for (Map.Entry<InetAddress, Collection<Range<Token>>> entry : rangesToFetch.get(table))
-            {
-                final InetAddress source = entry.getKey();
-                Collection<Range<Token>> ranges = entry.getValue();
-                final Runnable callback = new Runnable()
-                {
-                    public void run()
-                    {
-                        latch.countDown();
-                        if (logger.isDebugEnabled())
-                            logger.debug(String.format("Removed %s/%s as a bootstrap source; remaining is %s",
-                                                       source, table, latch.getCount()));
-                    }
-                };
-                if (logger.isDebugEnabled())
-                    logger.debug("Bootstrapping from " + source + " ranges " + StringUtils.join(ranges, ", "));
-                StreamIn.requestRanges(source, table, ranges, callback, OperationType.BOOTSTRAP);
-            }
-        }
-
-        try
-        {
-            latch.await();
-            StorageService.instance.finishBootstrapping();
-        }
-        catch (InterruptedException e)
-        {
-            throw new AssertionError(e);
-        }
+        streamer.fetch();
+        StorageService.instance.finishBootstrapping();
     }
 
     /**
@@ -160,7 +114,7 @@ public class BootStrapper
         List<InetAddress> endpoints = new ArrayList<InetAddress>(load.size());
         for (InetAddress endpoint : load.keySet())
         {
-            if (!metadata.isMember(endpoint))
+            if (!metadata.isMember(endpoint) || !FailureDetector.instance.isAlive(endpoint))
                 continue;
             endpoints.add(endpoint);
         }
@@ -193,41 +147,13 @@ public class BootStrapper
         assert !maxEndpoint.equals(FBUtilities.getBroadcastAddress());
         if (metadata.pendingRangeChanges(maxEndpoint) > 0)
             throw new RuntimeException("Every node is a bootstrap source! Please specify an initial token manually or wait for an existing bootstrap operation to finish.");
-        
+
         return maxEndpoint;
-    }
-
-    /** get potential sources for each range, ordered by proximity (as determined by EndpointSnitch) */
-    Multimap<Range<Token>, InetAddress> getRangesWithSources(String table)
-    {
-        assert tokenMetadata.sortedTokens().size() > 0;
-        final AbstractReplicationStrategy strat = Table.open(table).getReplicationStrategy();
-        Collection<Range<Token>> myRanges = strat.getPendingAddressRanges(tokenMetadata, token, address);
-
-        Multimap<Range<Token>, InetAddress> myRangeAddresses = ArrayListMultimap.create();
-        Multimap<Range<Token>, InetAddress> rangeAddresses = strat.getRangeAddresses(tokenMetadata);
-        for (Range<Token> myRange : myRanges)
-        {
-            for (Range<Token> range : rangeAddresses.keySet())
-            {
-                if (range.contains(myRange))
-                {
-                    List<InetAddress> preferred = DatabaseDescriptor.getEndpointSnitch().getSortedListByProximity(address, rangeAddresses.get(range));
-                    myRangeAddresses.putAll(myRange, preferred);
-                    break;
-                }
-            }
-            assert myRangeAddresses.keySet().contains(myRange);
-        }
-        return myRangeAddresses;
     }
 
     static Token<?> getBootstrapTokenFrom(InetAddress maxEndpoint)
     {
-        Message message = new Message(FBUtilities.getBroadcastAddress(),
-                                      StorageService.Verb.BOOTSTRAP_TOKEN, 
-                                      ArrayUtils.EMPTY_BYTE_ARRAY, 
-                                      Gossiper.instance.getVersion(maxEndpoint));
+        MessageOut message = new MessageOut(MessagingService.Verb.BOOTSTRAP_TOKEN);
         int retries = 5;
         long timeout = Math.max(MessagingService.getDefaultCallbackTimeout(), BOOTSTRAP_TIMEOUT);
 
@@ -244,47 +170,18 @@ public class BootStrapper
         throw new RuntimeException("Bootstrap failed, could not obtain token from: " + maxEndpoint);
     }
 
-    public static Multimap<InetAddress, Range<Token>> getWorkMap(Multimap<Range<Token>, InetAddress> rangesWithSourceTarget)
-    {
-        return getWorkMap(rangesWithSourceTarget, FailureDetector.instance);
-    }
-
-    static Multimap<InetAddress, Range<Token>> getWorkMap(Multimap<Range<Token>, InetAddress> rangesWithSourceTarget, IFailureDetector failureDetector)
-    {
-        /*
-         * Map whose key is the source node and the value is a map whose key is the
-         * target and value is the list of ranges to be sent to it.
-        */
-        Multimap<InetAddress, Range<Token>> sources = ArrayListMultimap.create();
-
-        // TODO look for contiguous ranges and map them to the same source
-        for (Range<Token> range : rangesWithSourceTarget.keySet())
-        {
-            for (InetAddress source : rangesWithSourceTarget.get(range))
-            {
-                // ignore the local IP...
-                if (failureDetector.isAlive(source) && !source.equals(FBUtilities.getBroadcastAddress()))
-                {
-                    sources.put(source, range);
-                    break;
-                }
-            }
-        }
-        return sources;
-    }
-
     public static class BootstrapTokenVerbHandler implements IVerbHandler
     {
-        public void doVerb(Message message, String id)
+        public void doVerb(MessageIn message, String id)
         {
             StorageService ss = StorageService.instance;
             String tokenString = StorageService.getPartitioner().getTokenFactory().toString(ss.getBootstrapToken());
-            Message response = message.getInternalReply(tokenString.getBytes(Charsets.UTF_8), message.getVersion());
-            MessagingService.instance().sendReply(response, id, message.getFrom());
+            MessageOut<String> response = new MessageOut<String>(MessagingService.Verb.INTERNAL_RESPONSE, tokenString, StringSerializer.instance);
+            MessagingService.instance().sendReply(response, id, message.from);
         }
     }
 
-    private static class BootstrapTokenCallback implements IAsyncCallback
+    private static class BootstrapTokenCallback implements IAsyncCallback<String>
     {
         private volatile Token<?> token;
         private final Condition condition = new SimpleCondition();
@@ -304,15 +201,35 @@ public class BootStrapper
             return success ? token : null;
         }
 
-        public void response(Message msg)
+        public void response(MessageIn<String> msg)
         {
-            token = StorageService.getPartitioner().getTokenFactory().fromString(new String(msg.getMessageBody(), Charsets.UTF_8));
+            token = StorageService.getPartitioner().getTokenFactory().fromString(msg.payload);
             condition.signalAll();
         }
 
         public boolean isLatencyForSnitch()
         {
             return false;
+        }
+    }
+
+    public static class StringSerializer implements IVersionedSerializer<String>
+    {
+        public static final StringSerializer instance = new StringSerializer();
+
+        public void serialize(String s, DataOutput out, int version) throws IOException
+        {
+            out.writeUTF(s);
+        }
+
+        public String deserialize(DataInput in, int version) throws IOException
+        {
+            return in.readUTF();
+        }
+
+        public long serializedSize(String s, int version)
+        {
+            return TypeSizes.NATIVE.sizeof(s);
         }
     }
 }

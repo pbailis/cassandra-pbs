@@ -19,7 +19,9 @@
 package org.apache.cassandra.service;
 
 import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.net.Message;
+import org.apache.cassandra.net.MessageIn;
+import org.apache.cassandra.net.MessageOut;
+
 
 import java.lang.management.ManagementFactory;
 import java.util.*;
@@ -333,7 +335,7 @@ public class PBSPredictor implements PBSPredictorMBean
         messageIdToSLatencies.put(id, new ConcurrentLinkedQueue<Long>());
     }
 
-    public static void logWriteResponse(String id, Message response)
+    public static void logWriteResponse(String id, MessageIn response)
     {
         if(!doLog)
             return;
@@ -352,7 +354,7 @@ public class PBSPredictor implements PBSPredictorMBean
             return;
         }
 
-        wLatencies.add(Math.max(0, response.getCreationTime() - startTime));
+        wLatencies.add(Math.max(0, response.creationTime - startTime));
 
         Collection<Long> aLatencies = messageIdToALatencies.get(id);
         if(aLatencies == null)
@@ -360,10 +362,10 @@ public class PBSPredictor implements PBSPredictorMBean
             return;
         }
 
-        aLatencies.add(Math.max(0, time - response.getCreationTime()));
+        aLatencies.add(Math.max(0, time - response.creationTime));
     }
 
-    public static void logReadResponse(String id, Message response)
+    public static void logReadResponse(String id, MessageIn response)
     {
         if(!doLog)
             return;
@@ -382,14 +384,14 @@ public class PBSPredictor implements PBSPredictorMBean
             return;
         }
 
-        rLatencies.add(Math.max(0, response.getCreationTime()-startTime));
+        rLatencies.add(Math.max(0, response.creationTime-startTime));
 
         Collection<Long> sLatencies = messageIdToSLatencies.get(id);
         if(sLatencies == null)
         {
             return;
         }
-        sLatencies.add(Math.max(0, time-response.getCreationTime()));
+        sLatencies.add(Math.max(0, time-response.creationTime));
     }
 
     Map<Integer, List<Long>> getOrderedWLatencies()

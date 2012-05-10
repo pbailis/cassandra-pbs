@@ -6,40 +6,35 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.apache.cassandra.utils;
 
-import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileDescriptor;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.lang.reflect.Field;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import org.apache.commons.lang.StringUtils;
 
 import com.sun.jna.LastErrorException;
 import com.sun.jna.Native;
 
 public final class CLibrary
 {
-    private static Logger logger = LoggerFactory.getLogger(CLibrary.class);
+    private static final Logger logger = LoggerFactory.getLogger(CLibrary.class);
 
     private static final int MCL_CURRENT = 1;
     private static final int MCL_FUTURE = 2;
-    
+
     private static final int ENOMEM = 12;
 
     private static final int F_GETFL   = 3;  /* get file status flags */
@@ -110,8 +105,7 @@ public final class CLibrary
     {
         try
         {
-            int result = mlockall(MCL_CURRENT);
-            assert result == 0; // mlockall should always be zero on success
+            mlockall(MCL_CURRENT);
             logger.info("JNA mlockall successful");
         }
         catch (UnsatisfiedLinkError e)
@@ -148,8 +142,7 @@ public final class CLibrary
     {
         try
         {
-            int result = link(sourceFile.getAbsolutePath(), destinationFile.getAbsolutePath());
-            assert result == 0; // success is always zero
+            link(sourceFile.getAbsolutePath(), destinationFile.getAbsolutePath());
         }
         catch (UnsatisfiedLinkError e)
         {
@@ -190,39 +183,12 @@ public final class CLibrary
         }
         try
         {
-            exec(pb);
+            FBUtilities.exec(pb);
         }
         catch (IOException ex)
         {
             logger.error("Unable to create hard link", ex);
             throw ex;
-        }
-    }
-
-    private static void exec(ProcessBuilder pb) throws IOException
-    {
-        Process p = pb.start();
-        try
-        {
-            int errCode = p.waitFor();
-            if (errCode != 0)
-            {
-                BufferedReader in = new BufferedReader(new InputStreamReader(p.getInputStream()));
-                BufferedReader err = new BufferedReader(new InputStreamReader(p.getErrorStream()));
-                StringBuffer buff = new StringBuffer();
-                String str;
-                while ((str = in.readLine()) != null)
-                    buff.append(str).append(System.getProperty("line.separator"));
-                while ((str = err.readLine()) != null)
-                    buff.append(str).append(System.getProperty("line.separator"));
-                throw new IOException("Exception while executing the command: "+ StringUtils.join(pb.command(), " ") +
-                                      ", command error Code: " + errCode +
-                                      ", command output: "+ buff.toString());
-            }
-        }
-        catch (InterruptedException e)
-        {
-            throw new RuntimeException(e);
         }
     }
 
@@ -247,12 +213,12 @@ public final class CLibrary
 
     public static int tryFcntl(int fd, int command, int flags)
     {
+        // fcntl return value may or may not be useful, depending on the command
         int result = -1;
 
         try
         {
             result = CLibrary.fcntl(fd, command, flags);
-            assert result >= 0; // on error a value of -1 is returned and errno is set to indicate the error.
         }
         catch (RuntimeException e)
         {

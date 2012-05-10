@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,37 +15,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.db;
 
-import java.io.*;
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
 
 import org.apache.cassandra.io.IVersionedSerializer;
-import org.apache.cassandra.io.util.FastByteArrayOutputStream;
-import org.apache.cassandra.net.Message;
-import org.apache.cassandra.net.MessageProducer;
-import org.apache.cassandra.service.StorageService;
-import org.apache.cassandra.utils.FBUtilities;
+import org.apache.cassandra.net.MessageOut;
+import org.apache.cassandra.net.MessagingService;
 
 /**
  * A truncate operation descriptor
  */
-public class Truncation implements MessageProducer
+public class Truncation
 {
-    private static IVersionedSerializer<Truncation> serializer;
+    public static final IVersionedSerializer<Truncation> serializer = new TruncationSerializer();
 
     public final String keyspace;
     public final String columnFamily;
-
-    static
-    {
-        serializer = new TruncationSerializer();
-    }
-
-    public static IVersionedSerializer<Truncation> serializer()
-    {
-        return serializer;
-    }
 
     public Truncation(String keyspace, String columnFamily)
     {
@@ -53,12 +41,9 @@ public class Truncation implements MessageProducer
         this.columnFamily = columnFamily;
     }
 
-    public Message getMessage(Integer version) throws IOException
+    public MessageOut<Truncation> createMessage()
     {
-        FastByteArrayOutputStream bos = new FastByteArrayOutputStream();
-        DataOutputStream dos = new DataOutputStream(bos);
-        serializer().serialize(this, dos, version);
-        return new Message(FBUtilities.getBroadcastAddress(), StorageService.Verb.TRUNCATE, bos.toByteArray(), version);
+        return new MessageOut<Truncation>(MessagingService.Verb.TRUNCATE, this, serializer);
     }
 
     public String toString()
@@ -84,6 +69,6 @@ class TruncationSerializer implements IVersionedSerializer<Truncation>
 
     public long serializedSize(Truncation truncation, int version)
     {
-        throw new UnsupportedOperationException();
+        return TypeSizes.NATIVE.sizeof(truncation.keyspace) + TypeSizes.NATIVE.sizeof(truncation.columnFamily);
     }
 }

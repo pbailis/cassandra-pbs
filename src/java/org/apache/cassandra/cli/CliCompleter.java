@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -21,7 +21,7 @@ import jline.SimpleCompletor;
 
 public class CliCompleter extends SimpleCompletor
 {
-    private static String[] commands = {
+    private static final String[] commands = {
             "connect",
             "describe keyspace",
             "exit",
@@ -38,7 +38,7 @@ public class CliCompleter extends SimpleCompletor
             "rename keyspace",
             "rename column family",
             "consistencylevel",
-            
+
             "help connect",
             "help describe keyspace",
             "help exit",
@@ -62,7 +62,7 @@ public class CliCompleter extends SimpleCompletor
             "help truncate",
             "help consistencylevel"
     };
-    private static String[] keyspaceCommands = {
+    private static final String[] keyspaceCommands = {
             "get",
             "set",
             "count",
@@ -77,7 +77,7 @@ public class CliCompleter extends SimpleCompletor
     {
         super(commands);
     }
-    
+
     String[] getKeyspaceCommands()
     {
         return keyspaceCommands;

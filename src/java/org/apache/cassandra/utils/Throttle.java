@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.utils;
 
 import org.slf4j.Logger;
@@ -27,7 +26,7 @@ import org.slf4j.LoggerFactory;
  */
 public class Throttle
 {
-    private static Logger logger = LoggerFactory.getLogger(Throttle.class);
+    private static final Logger logger = LoggerFactory.getLogger(Throttle.class);
 
     private final String name;
     private final ThroughputFunction fun;
@@ -95,7 +94,7 @@ public class Throttle
     {
         return "Throttle(for=" + name + ")";
     }
-    
+
     public interface ThroughputFunction
     {
         /**

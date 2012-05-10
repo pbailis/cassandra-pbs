@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.locator;
 
 import java.io.DataInputStream;
@@ -42,7 +41,7 @@ import org.apache.cassandra.utils.FBUtilities;
  */
 public class Ec2Snitch extends AbstractNetworkTopologySnitch
 {
-    protected static Logger logger = LoggerFactory.getLogger(Ec2Snitch.class);
+    protected static final Logger logger = LoggerFactory.getLogger(Ec2Snitch.class);
     protected static final String ZONE_NAME_QUERY_URL = "http://169.254.169.254/latest/meta-data/placement/availability-zone";
     private static final String DEFAULT_DC = "UNKNOWN-DC";
     private static final String DEFAULT_RACK = "UNKNOWN-RACK";
@@ -51,13 +50,19 @@ public class Ec2Snitch extends AbstractNetworkTopologySnitch
 
     public Ec2Snitch() throws IOException, ConfigurationException
     {
+        String az = awsApiCall(ZONE_NAME_QUERY_URL);
         // Split "us-east-1a" or "asia-1a" into "us-east"/"1a" and "asia"/"1a".
-        String[] splits = awsApiCall(ZONE_NAME_QUERY_URL).split("-");
+        String[] splits = az.split("-");
         ec2zone = splits[splits.length - 1];
-        ec2region = splits.length < 3 ? splits[0] : splits[0] + "-" + splits[1];
+
+        // hack for CASSANDRA-4026
+        ec2region = az.substring(0, az.length() - 1);
+        if (ec2region.endsWith("1"))
+            ec2region = az.substring(0, az.length() - 3);
+        
         logger.info("EC2Snitch using region: " + ec2region + ", zone: " + ec2zone + ".");
     }
-    
+
     String awsApiCall(String url) throws IOException, ConfigurationException
     {
         // Populate the region and zone by introspection, fail if 404 on metadata

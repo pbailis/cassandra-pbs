@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -7,14 +7,13 @@
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.apache.cassandra.io.sstable;
 
@@ -28,7 +27,9 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
+import org.apache.cassandra.config.Config;
 import org.apache.cassandra.config.ConfigurationException;
+import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
@@ -47,10 +48,15 @@ public class SSTableLoader
     private final Client client;
     private final OutputHandler outputHandler;
 
+    static
+    {
+        Config.setLoadYaml(false);
+    }
+
     public SSTableLoader(File directory, Client client, OutputHandler outputHandler)
     {
         this.directory = directory;
-        this.keyspace = directory.getName();
+        this.keyspace = directory.getParentFile().getName();
         this.client = client;
         this.outputHandler = outputHandler;
     }
@@ -130,7 +136,7 @@ public class SSTableLoader
                 continue;
             }
             Collection<Range<Token>> ranges = entry.getValue();
-            StreamOutSession session = StreamOutSession.create(keyspace, remote, new CountDownCallback(future.latch, remote));
+            StreamOutSession session = StreamOutSession.create(keyspace, remote, new CountDownCallback(future, remote));
             // transferSSTables assumes references have been acquired
             SSTableReader.acquireReferences(sstables);
             StreamOut.transferSSTables(session, sstables, ranges, OperationType.BULK_LOAD);
@@ -143,6 +149,7 @@ public class SSTableLoader
     {
         final CountDownLatch latch;
         final Map<InetAddress, Collection<PendingFile>> pendingFiles;
+        private List<InetAddress> failedHosts = new ArrayList<InetAddress>();
 
         private LoaderFuture(int request)
         {
@@ -153,6 +160,16 @@ public class SSTableLoader
         private void setPendings(InetAddress remote, Collection<PendingFile> files)
         {
             pendingFiles.put(remote, new ArrayList(files));
+        }
+
+        private void setFailed(InetAddress addr)
+        {
+            failedHosts.add(addr);
+        }
+
+        public List<InetAddress> getFailedHosts()
+        {
+            return failedHosts;
         }
 
         public boolean cancel(boolean mayInterruptIfRunning)
@@ -185,6 +202,11 @@ public class SSTableLoader
             return latch.getCount() == 0;
         }
 
+        public boolean hadFailures()
+        {
+            return failedHosts.size() > 0;
+        }
+
         public Map<InetAddress, Collection<PendingFile>> getPendingFiles()
         {
             return pendingFiles;
@@ -199,25 +221,33 @@ public class SSTableLoader
         return builder.toString();
     }
 
-    private class CountDownCallback implements Runnable
+    private class CountDownCallback implements IStreamCallback
     {
         private final InetAddress endpoint;
-        private final CountDownLatch latch;
+        private final LoaderFuture future;
 
-        CountDownCallback(CountDownLatch latch, InetAddress endpoint)
+        CountDownCallback(LoaderFuture future, InetAddress endpoint)
         {
-            this.latch = latch;
+            this.future = future;
             this.endpoint = endpoint;
         }
 
-        public void run()
+        public void onSuccess()
         {
-            latch.countDown();
-            outputHandler.debug(String.format("Streaming session to %s completed (waiting on %d outstanding sessions)", endpoint, latch.getCount()));
+            future.latch.countDown();
+            outputHandler.debug(String.format("Streaming session to %s completed (waiting on %d outstanding sessions)", endpoint, future.latch.getCount()));
 
             // There could be race with stop being called twice but it should be ok
-            if (latch.getCount() == 0)
+            if (future.latch.getCount() == 0)
                 client.stop();
+        }
+
+        public void onFailure()
+        {
+            outputHandler.output(String.format("Streaming session to %s failed", endpoint));
+            future.setFailed(endpoint);
+            future.latch.countDown();
+            client.stop();
         }
     }
 
@@ -265,6 +295,7 @@ public class SSTableLoader
         protected void setPartitioner(String partclass) throws ConfigurationException
         {
             this.partitioner = FBUtilities.newPartitioner(partclass);
+            DatabaseDescriptor.setPartitioner(partitioner);
         }
 
         public IPartitioner getPartitioner()

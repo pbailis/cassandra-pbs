@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -26,7 +26,7 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.apache.cassandra.db.DBConstants;
+import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.db.marshal.MarshalException;
 import org.apache.cassandra.utils.Allocator;
 import org.apache.cassandra.utils.ByteBufferUtil;
@@ -70,10 +70,10 @@ import org.apache.cassandra.utils.NodeId;
  */
 public class CounterContext implements IContext
 {
-    private static final int HEADER_SIZE_LENGTH = DBConstants.shortSize;
-    private static final int HEADER_ELT_LENGTH = DBConstants.shortSize;
-    private static final int CLOCK_LENGTH = DBConstants.longSize;
-    private static final int COUNT_LENGTH = DBConstants.longSize;
+    private static final int HEADER_SIZE_LENGTH = TypeSizes.NATIVE.sizeof(Short.MAX_VALUE);
+    private static final int HEADER_ELT_LENGTH = TypeSizes.NATIVE.sizeof(Short.MAX_VALUE);
+    private static final int CLOCK_LENGTH = TypeSizes.NATIVE.sizeof(Long.MAX_VALUE);
+    private static final int COUNT_LENGTH = TypeSizes.NATIVE.sizeof(Long.MAX_VALUE);
     private static final int STEP_LENGTH = NodeId.LENGTH + CLOCK_LENGTH + COUNT_LENGTH;
 
     private static final Logger logger = LoggerFactory.getLogger(CounterContext.class);
@@ -169,6 +169,8 @@ public class CounterContext implements IContext
             {
                 long leftClock  = leftState.getClock();
                 long rightClock = rightState.getClock();
+                long leftCount = leftState.getCount();
+                long rightCount = rightState.getCount();
 
                 // advance
                 leftState.moveToNext();
@@ -177,7 +179,16 @@ public class CounterContext implements IContext
                 // process clock comparisons
                 if (leftClock == rightClock)
                 {
-                    continue;
+                    if (leftCount != rightCount)
+                    {
+                        // Inconsistent shard (see the corresponding code in merge()). We return DISJOINT in this
+                        // case so that it will be treated as a difference, allowing read-repair to work.
+                        return ContextRelationship.DISJOINT;
+                    }
+                    else
+                    {
+                        continue;
+                    }
                 }
                 else if ((leftClock >= 0 && rightClock > 0 && leftClock > rightClock)
                       || (leftClock < 0 && (rightClock > 0 || leftClock < rightClock)))
@@ -356,11 +367,42 @@ public class CounterContext implements IContext
                 {
                     long leftClock = leftState.getClock();
                     long rightClock = rightState.getClock();
-                    if ((leftClock >= 0 && rightClock > 0 && leftClock >= rightClock)
-                     || (leftClock < 0 && (rightClock > 0 || leftClock < rightClock)))
-                        leftState.copyTo(mergedState);
+
+                    if (leftClock == rightClock)
+                    {
+                        // We should never see non-delta shards w/ same id+clock but different counts. However, if we do
+                        // we should "heal" the problem by being deterministic in our selection of shard - and
+                        // log the occurrence so that the operator will know something is wrong.
+                        long leftCount = leftState.getCount();
+                        long rightCount = rightState.getCount();
+
+                        if (leftCount != rightCount)
+                        {
+                            logger.error("invalid counter shard detected; ({}, {}, {}) and ({}, {}, {}) differ only in "
+                                    + "count; will pick highest to self-heal; this indicates a bug or corruption generated a bad counter shard",
+                                    new Object[] {
+                                            leftState.getNodeId(), leftClock, leftCount,
+                                            rightState.getNodeId(), rightClock, rightCount,
+                                     });
+                        }
+
+                        if (leftCount > rightCount)
+                        {
+                            leftState.copyTo(mergedState);
+                        }
+                        else
+                        {
+                            rightState.copyTo(mergedState);
+                        }
+                    }
                     else
-                        rightState.copyTo(mergedState);
+                    {
+                        if ((leftClock >= 0 && rightClock > 0 && leftClock >= rightClock)
+                                || (leftClock < 0 && (rightClock > 0 || leftClock < rightClock)))
+                            leftState.copyTo(mergedState);
+                        else
+                            rightState.copyTo(mergedState);
+                    }
                 }
                 rightState.moveToNext();
                 leftState.moveToNext();

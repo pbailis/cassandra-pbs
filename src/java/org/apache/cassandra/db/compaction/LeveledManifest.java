@@ -1,6 +1,4 @@
-package org.apache.cassandra.db.compaction;
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,18 +6,16 @@ package org.apache.cassandra.db.compaction;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-
+package org.apache.cassandra.db.compaction;
 
 import java.io.File;
 import java.io.IOError;
@@ -27,12 +23,13 @@ import java.io.IOException;
 import java.util.*;
 
 import com.google.common.collect.Iterables;
+import com.google.common.primitives.Ints;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.DecoratedKey;
+import org.apache.cassandra.db.RowPosition;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.io.sstable.SSTable;
@@ -43,6 +40,8 @@ import org.codehaus.jackson.JsonFactory;
 import org.codehaus.jackson.JsonGenerator;
 import org.codehaus.jackson.JsonNode;
 import org.codehaus.jackson.map.ObjectMapper;
+
+import static org.apache.cassandra.db.compaction.AbstractCompactionStrategy.filterSuspectSSTables;
 
 public class LeveledManifest
 {
@@ -55,13 +54,13 @@ public class LeveledManifest
      * uses a pessimistic estimate of how many keys overlap (none), so we risk wasting memory
      * or even OOMing when compacting highly overlapping sstables
      */
-    static int MAX_COMPACTING_L0 = 32;
+    static final int MAX_COMPACTING_L0 = 32;
 
     private final ColumnFamilyStore cfs;
     private final List<SSTableReader>[] generations;
-    private final DecoratedKey[] lastCompactedKeys;
+    private final Map<SSTableReader, Integer> sstableGenerations;
+    private final RowPosition[] lastCompactedKeys;
     private final int maxSSTableSizeInMB;
-    private int levelCount;
 
     private LeveledManifest(ColumnFamilyStore cfs, int maxSSTableSizeInMB)
     {
@@ -71,12 +70,13 @@ public class LeveledManifest
         // allocate enough generations for a PB of data
         int n = (int) Math.log10(1000 * 1000 * 1000 / maxSSTableSizeInMB);
         generations = new List[n];
-        lastCompactedKeys = new DecoratedKey[n];
+        lastCompactedKeys = new RowPosition[n];
         for (int i = 0; i < generations.length; i++)
         {
             generations[i] = new ArrayList<SSTableReader>();
-            lastCompactedKeys[i] = new DecoratedKey(cfs.partitioner.getMinimumToken(), null);
+            lastCompactedKeys[i] = cfs.partitioner.getMinimumToken().minKeyBound();
         }
+        sstableGenerations = new HashMap<SSTableReader, Integer>();
     }
 
     static LeveledManifest create(ColumnFamilyStore cfs, int maxSSTableSize)
@@ -139,7 +139,7 @@ public class LeveledManifest
     }
 
     /**
-     * if the number of SSTables in the current compacted set *by itself* exeeds the target level's
+     * if the number of SSTables in the current compacted set *by itself* exceeds the target level's
      * (regardless of the level's current contents), find an empty level instead
      */
     private int skipLevels(int newLevel, Iterable<SSTableReader> added)
@@ -165,10 +165,10 @@ public class LeveledManifest
         int maximumLevel = 0;
         for (SSTableReader sstable : removed)
         {
-            int thisLevel = levelOf(sstable);
+            int thisLevel = remove(sstable);
+            assert thisLevel >= 0;
             maximumLevel = Math.max(maximumLevel, thisLevel);
             minimumLevel = Math.min(minimumLevel, thisLevel);
-            remove(sstable);
         }
 
         // it's valid to do a remove w/o an add (e.g. on truncate)
@@ -184,6 +184,30 @@ public class LeveledManifest
         lastCompactedKeys[minimumLevel] = SSTable.sstableOrdering.max(added).last;
         for (SSTableReader ssTableReader : added)
             add(ssTableReader, newLevel);
+
+        DecoratedKey last = null;
+        Collections.sort(generations[newLevel], SSTable.sstableComparator);
+        for (SSTableReader sstable : generations[newLevel])
+        {
+            assert last == null || sstable.first.compareTo(last) > 0;
+            last = sstable.last;
+        }
+
+        serialize();
+    }
+
+    public synchronized void replace(Iterable<SSTableReader> removed, Iterable<SSTableReader> added)
+    {
+        // replace is for compaction operation that operate on exactly one sstable, with no merging.
+        // Thus, removed will be exactly one sstable, and added will be 0 or 1.
+        assert Iterables.size(removed) == 1 : Iterables.size(removed);
+        assert Iterables.size(added) <= 1 : Iterables.size(added);
+        logDistribution();
+        logger.debug("Replacing {} with {}", removed, added);
+
+        int level = remove(removed.iterator().next());
+        if (!Iterables.isEmpty(added))
+            add(added.iterator().next(), level);
 
         serialize();
     }
@@ -203,11 +227,14 @@ public class LeveledManifest
         return builder.toString();
     }
 
-    private double maxBytesForLevel (int level)
+    private long maxBytesForLevel(int level)
     {
-        return level == 0
-               ? 4 * maxSSTableSizeInMB * 1024 * 1024
-               : Math.pow(10, level) * maxSSTableSizeInMB * 1024 * 1024;
+        if (level == 0)
+            return 4 * maxSSTableSizeInMB * 1024 * 1024;
+        double bytes = Math.pow(10, level) * maxSSTableSizeInMB * 1024 * 1024;
+        if (bytes > Long.MAX_VALUE)
+            throw new RuntimeException("At most " + Long.MAX_VALUE + " bytes may be in a compaction level; your maxSSTableSize must be absurdly high to compute " + bytes);
+        return (long) bytes;
     }
 
     public synchronized Collection<SSTableReader> getCompactionCandidates()
@@ -238,7 +265,7 @@ public class LeveledManifest
             List<SSTableReader> sstables = generations[i];
             if (sstables.isEmpty())
                 continue; // mostly this just avoids polluting the debug log with zero scores
-            double score = SSTableReader.getTotalBytes(sstables) / maxBytesForLevel(i);
+            double score = (double)SSTableReader.getTotalBytes(sstables) / (double)maxBytesForLevel(i);
             logger.debug("Compaction score for level {} is {}", i, score);
 
             // L0 gets a special case that if we don't have anything more important to do,
@@ -246,53 +273,82 @@ public class LeveledManifest
             if (score > 1.001 || i == 0)
             {
                 Collection<SSTableReader> candidates = getCandidatesFor(i);
+
                 if (logger.isDebugEnabled())
                     logger.debug("Compaction candidates for L{} are {}", i, toString(candidates));
-                return candidates;
+
+                // check if have any SSTables marked as suspected,
+                // saves us filter time when no SSTables are suspects
+                return hasSuspectSSTables(candidates)
+                        ? filterSuspectSSTables(candidates)
+                        : candidates;
             }
         }
 
         return Collections.emptyList();
     }
 
+    /**
+     * Go through candidates collection and check if any of the SSTables are marked as suspected.
+     *
+     * @param candidates The SSTable collection to examine.
+     *
+     * @return true if collection has at least one SSTable marked as suspected, false otherwise.
+     */
+    private boolean hasSuspectSSTables(Collection<SSTableReader> candidates)
+    {
+        for (SSTableReader candidate : candidates)
+        {
+            if (candidate.isMarkedSuspect())
+                return true;
+        }
+
+        return false;
+    }
+
     public int getLevelSize(int i)
     {
-
         return generations.length > i ? generations[i].size() : 0;
     }
 
     private void logDistribution()
     {
-        for (int i = 0; i < generations.length; i++)
+        if (logger.isDebugEnabled())
         {
-            if (!generations[i].isEmpty())
+            for (int i = 0; i < generations.length; i++)
             {
-                logger.debug("L{} contains {} SSTables ({} bytes) in {}",
-                             new Object[] {i, generations[i].size(), SSTableReader.getTotalBytes(generations[i]), this});
+                if (!generations[i].isEmpty())
+                {
+                    logger.debug("L{} contains {} SSTables ({} bytes) in {}",
+                            new Object[] {i, generations[i].size(), SSTableReader.getTotalBytes(generations[i]), this});
+                }
             }
         }
     }
 
-    private int levelOf(SSTableReader sstable)
+    int levelOf(SSTableReader sstable)
     {
-        for (int level = 0; level < generations.length; level++)
-        {
-            if (generations[level].contains(sstable))
-                return level;
-        }
-        return -1;
+        Integer level = sstableGenerations.get(sstable);
+        if (level == null)
+            return -1;
+
+        return level.intValue();
     }
 
-    private void remove(SSTableReader reader)
+    private int remove(SSTableReader reader)
     {
         int level = levelOf(reader);
         assert level >= 0 : reader + " not present in manifest";
         generations[level].remove(reader);
+        sstableGenerations.remove(reader);
+        return level;
     }
 
     private void add(SSTableReader sstable, int level)
     {
+        assert level < generations.length : "Invalid level " + level + " out of " + (generations.length - 1);
         generations[level].add(sstable);
+        sstableGenerations.put(sstable, Integer.valueOf(level));
     }
 
     private static List<SSTableReader> overlapping(SSTableReader sstable, Iterable<SSTableReader> candidates)
@@ -343,11 +399,14 @@ public class LeveledManifest
         return overlapping(generations[level].get(0), generations[(level + 1)]);
     }
 
+    public static File tryGetManifest(ColumnFamilyStore cfs)
+    {
+        return cfs.directories.tryGetLeveledManifest();
+    }
+
     public synchronized void serialize()
     {
-        File manifestFile = tryGetManifest(cfs);
-        if (manifestFile == null)
-            manifestFile = new File(new File(DatabaseDescriptor.getAllDataFileLocations()[0], cfs.table.name), cfs.columnFamily + ".json");
+        File manifestFile = cfs.directories.getOrCreateLeveledManifest();
         File oldFile = new File(manifestFile.getPath().replace(EXTENSION, "-old.json"));
         File tmpFile = new File(manifestFile.getPath().replace(EXTENSION, "-tmp.json"));
 
@@ -387,21 +446,6 @@ public class LeveledManifest
         }
     }
 
-    public static File tryGetManifest(ColumnFamilyStore cfs)
-    {
-        for (String dir : DatabaseDescriptor.getAllDataFileLocations())
-        {
-            File manifestFile = new File(new File(dir, cfs.table.name), cfs.columnFamily + EXTENSION);
-            if (manifestFile.exists())
-            {
-                logger.debug("Found manifest at {}", manifestFile);
-                return manifestFile;
-            }
-        }
-        logger.debug("No level manifest found");
-        return null;
-    }
-
     @Override
     public String toString()
     {
@@ -425,12 +469,14 @@ public class LeveledManifest
 
     public int getEstimatedTasks()
     {
-        int n = 0;
+        long tasks = 0;
         for (int i = generations.length - 1; i >= 0; i--)
         {
             List<SSTableReader> sstables = generations[i];
-            n += Math.max(0L, SSTableReader.getTotalBytes(sstables) - maxBytesForLevel(i)) / (maxSSTableSizeInMB * 1024 * 1024);
+            long n = Math.max(0L, SSTableReader.getTotalBytes(sstables) - maxBytesForLevel(i)) / (maxSSTableSizeInMB * 1024 * 1024);
+            logger.debug("Estimating " + n + " compaction tasks in level " + i);
+            tasks += n;
         }
-        return n;
+        return Ints.checkedCast(tasks);
     }
 }

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.service;
 
 import java.io.File;
@@ -24,38 +23,36 @@ import java.net.InetAddress;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.Arrays;
-import java.util.UUID;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import com.google.common.collect.Iterables;
 import org.apache.log4j.PropertyConfigurator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.concurrent.DebuggableThreadPoolExecutor;
+import org.apache.cassandra.concurrent.NamedThreadFactory;
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.ConfigurationException;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.config.Schema;
-import org.apache.cassandra.gms.Gossiper;
 import org.apache.cassandra.db.ColumnFamilyStore;
+import org.apache.cassandra.db.Directories;
 import org.apache.cassandra.db.SystemTable;
 import org.apache.cassandra.db.Table;
 import org.apache.cassandra.db.commitlog.CommitLog;
-import org.apache.cassandra.db.migration.Migration;
 import org.apache.cassandra.utils.CLibrary;
 import org.apache.cassandra.utils.Mx4jTool;
-
-import com.google.common.collect.Iterables;
 
 /**
  * The <code>CassandraDaemon</code> is an abstraction for a Cassandra daemon
  * service, which defines not only a way to activate and deactivate it, but also
  * hooks into its lifecycle methods (see {@link #setup()}, {@link #start()},
  * {@link #stop()} and {@link #setup()}).
- * 
+ *
  */
 public abstract class AbstractCassandraDaemon implements CassandraDaemon
 {
@@ -78,7 +75,7 @@ public abstract class AbstractCassandraDaemon implements CassandraDaemon
                 // then try loading from the classpath.
                 configLocation = AbstractCassandraDaemon.class.getClassLoader().getResource(config);
             }
-        
+
             if (configLocation == null)
                 throw new RuntimeException("Couldn't figure out log4j configuration: "+config);
 
@@ -103,14 +100,14 @@ public abstract class AbstractCassandraDaemon implements CassandraDaemon
         }
     }
 
-    private static Logger logger = LoggerFactory.getLogger(AbstractCassandraDaemon.class);
+    private static final Logger logger = LoggerFactory.getLogger(AbstractCassandraDaemon.class);
 
     static final AtomicInteger exceptions = new AtomicInteger();
-    
+
     protected InetAddress listenAddr;
     protected int listenPort;
     protected volatile boolean isRunning = false;
-    
+
     /**
      * This is a hook for concrete daemons to initialize themselves suitably.
      *
@@ -133,7 +130,7 @@ public abstract class AbstractCassandraDaemon implements CassandraDaemon
             public void uncaughtException(Thread t, Throwable e)
             {
                 exceptions.incrementAndGet();
-                logger.error("Fatal exception in thread " + t, e);
+                logger.error("Exception in thread " + t, e);
                 for (Throwable e2 = e; e2 != null; e2 = e2.getCause())
                 {
                     // some code, like FileChannel.map, will wrap an OutOfMemoryError in another exception
@@ -156,6 +153,10 @@ public abstract class AbstractCassandraDaemon implements CassandraDaemon
                     : String.format("Directory %s is not accessible.", dataDir);
         }
 
+        // Migrate sstables from pre-#2749 to the correct location
+        if (Directories.sstablesNeedsMigration())
+            Directories.migrateSSTables();
+
         if (CacheService.instance == null) // should never happen
             throw new RuntimeException("Failed to initialize Cache Service.");
 
@@ -173,7 +174,7 @@ public abstract class AbstractCassandraDaemon implements CassandraDaemon
             logger.error("Fatal exception during initialization", e);
             System.exit(100);
         }
-        
+
         // load keyspace descriptions.
         try
         {
@@ -184,7 +185,7 @@ public abstract class AbstractCassandraDaemon implements CassandraDaemon
             logger.error("Fatal exception during initialization", e);
             System.exit(100);
         }
-        
+
         // clean up debris in the rest of the tables
         for (String table : Schema.instance.getTables())
         {
@@ -220,17 +221,6 @@ public abstract class AbstractCassandraDaemon implements CassandraDaemon
         // replay the log if necessary
         CommitLog.instance.recover();
 
-        // check to see if CL.recovery modified the lastMigrationId. if it did, we need to re apply migrations. this isn't
-        // the same as merely reloading the schema (which wouldn't perform file deletion after a DROP). The solution
-        // is to read those migrations from disk and apply them.
-        UUID currentMigration = Schema.instance.getVersion();
-        UUID lastMigration = Migration.getLastMigrationId();
-        if ((lastMigration != null) && (lastMigration.timestamp() > currentMigration.timestamp()))
-        {
-            Gossiper.instance.maybeInitializeLocalState(SystemTable.incrementAndGetGeneration());
-            MigrationManager.applyMigrations(currentMigration, lastMigration);
-        }
-        
         SystemTable.finishStartup();
 
         // start server internals
@@ -253,7 +243,7 @@ public abstract class AbstractCassandraDaemon implements CassandraDaemon
      * Initialize the Cassandra Daemon based on the given <a
      * href="http://commons.apache.org/daemon/jsvc.html">Commons
      * Daemon</a>-specific arguments. To clarify, this is a hook for JSVC.
-     * 
+     *
      * @param arguments
      *            the arguments passed in from JSVC
      * @throws IOException
@@ -262,7 +252,7 @@ public abstract class AbstractCassandraDaemon implements CassandraDaemon
     {
         setup();
     }
-    
+
     /**
      * Start the Cassandra Daemon, assuming that it has already been
      * initialized via {@link #init(String[])}
@@ -282,7 +272,7 @@ public abstract class AbstractCassandraDaemon implements CassandraDaemon
             logger.info("Not starting RPC server as requested. Use JMX (StorageService->startRPCServer()) to start it");
         }
     }
-    
+
     /**
      * Stop the daemon, ideally in an idempotent manner.
      *
@@ -342,42 +332,42 @@ public abstract class AbstractCassandraDaemon implements CassandraDaemon
      */
     protected abstract void stopServer();
 
-    
+
     /**
      * Clean up all resources obtained during the lifetime of the daemon. This
      * is a hook for JSVC.
      */
     public void destroy()
     {}
-    
+
     /**
      * A convenience method to initialize and start the daemon in one shot.
      */
     public void activate()
     {
         String pidFile = System.getProperty("cassandra-pidfile");
-        
+
         try
         {
             setup();
-            
+
             if (pidFile != null)
             {
                 new File(pidFile).deleteOnExit();
             }
-            
+
             if (System.getProperty("cassandra-foreground") == null)
             {
                 System.out.close();
                 System.err.close();
             }
-            
+
             start();
         }
         catch (Throwable e)
         {
             logger.error("Exception encountered during startup", e);
-            
+
             // try to warn user on stdout too, if we haven't already detached
             e.printStackTrace();
             System.out.println("Exception encountered during startup: " + e.getMessage());
@@ -385,7 +375,7 @@ public abstract class AbstractCassandraDaemon implements CassandraDaemon
             System.exit(3);
         }
     }
-    
+
     /**
      * A convenience method to stop and destroy the daemon in one shot.
      */
@@ -394,17 +384,20 @@ public abstract class AbstractCassandraDaemon implements CassandraDaemon
         stop();
         destroy();
     }
-    
+
     /**
      * A subclass of Java's ThreadPoolExecutor which implements Jetty's ThreadPool
      * interface (for integration with Avro), and performs ClientState cleanup.
+     *
+     * (Note that the tasks being executed perform their own while-command-process
+     * loop until the client disconnects.)
      */
-    public static class CleaningThreadPool extends ThreadPoolExecutor 
+    public static class CleaningThreadPool extends ThreadPoolExecutor
     {
-        private ThreadLocal<ClientState> state;
+        private final ThreadLocal<ClientState> state;
         public CleaningThreadPool(ThreadLocal<ClientState> state, int minWorkerThread, int maxWorkerThreads)
         {
-            super(minWorkerThread, maxWorkerThreads, 60, TimeUnit.SECONDS, new SynchronousQueue<Runnable>());
+            super(minWorkerThread, maxWorkerThreads, 60, TimeUnit.SECONDS, new SynchronousQueue<Runnable>(), new NamedThreadFactory("Thrift"));
             this.state = state;
         }
 
@@ -415,7 +408,5 @@ public abstract class AbstractCassandraDaemon implements CassandraDaemon
             DebuggableThreadPoolExecutor.logExceptionsAfterExecute(r, t);
             state.get().logout();
         }
-
-
     }
 }

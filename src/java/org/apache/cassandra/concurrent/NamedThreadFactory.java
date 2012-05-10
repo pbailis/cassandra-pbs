@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,15 +15,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.concurrent;
 
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * This class is an implementation of the <i>ThreadFactory</i> interface. This 
- * is useful to give Java threads meaningful names which is useful when using 
+ * This class is an implementation of the <i>ThreadFactory</i> interface. This
+ * is useful to give Java threads meaningful names which is useful when using
  * a tool like JConsole.
  */
 
@@ -46,10 +45,11 @@ public class NamedThreadFactory implements ThreadFactory
     }
 
     public Thread newThread(Runnable runnable)
-    {        
+    {
         String name = id + ":" + n.getAndIncrement();
         Thread thread = new Thread(runnable, name);
         thread.setPriority(priority);
+        thread.setDaemon(true);
         return thread;
     }
 }

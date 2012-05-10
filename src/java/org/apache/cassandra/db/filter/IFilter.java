@@ -1,6 +1,4 @@
-package org.apache.cassandra.db.filter;
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -9,19 +7,19 @@ package org.apache.cassandra.db.filter;
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+package org.apache.cassandra.db.filter;
 
 import java.util.Comparator;
 import java.util.Iterator;
+import java.util.List;
 
 import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.columniterator.IColumnIterator;
@@ -42,7 +40,7 @@ public interface IFilter
      * returns an iterator that returns columns from the given memtable
      * matching the Filter criteria in sorted order.
      */
-    public abstract IColumnIterator getMemtableColumnIterator(ColumnFamily cf, DecoratedKey<?> key);
+    public abstract IColumnIterator getMemtableColumnIterator(ColumnFamily cf, DecoratedKey key);
 
     /**
      * Get an iterator that returns columns from the given SSTable using the opened file
@@ -51,13 +49,13 @@ public interface IFilter
      * @param file Already opened file data input, saves us opening another one
      * @param key The key of the row we are about to iterate over
      */
-    public abstract IColumnIterator getSSTableColumnIterator(SSTableReader sstable, FileDataInput file, DecoratedKey<?> key);
+    public abstract IColumnIterator getSSTableColumnIterator(SSTableReader sstable, FileDataInput file, DecoratedKey key, RowIndexEntry indexEntry);
 
     /**
      * returns an iterator that returns columns from the given SSTable
      * matching the Filter criteria in sorted order.
      */
-    public abstract IColumnIterator getSSTableColumnIterator(SSTableReader sstable, DecoratedKey<?> key);
+    public abstract IColumnIterator getSSTableColumnIterator(SSTableReader sstable, DecoratedKey key);
 
     /**
      * collects columns from reducedColumns into returnCF.  Termination is determined
@@ -72,7 +70,8 @@ public interface IFilter
      */
     public abstract SuperColumn filterSuperColumn(SuperColumn superColumn, int gcBefore);
 
-    public Comparator<IColumn> getColumnComparator(AbstractType comparator);
+    public Comparator<IColumn> getColumnComparator(AbstractType<?> comparator);
 
     public boolean isReversed();
+    public void updateColumnsLimit(int newLimit);
 }

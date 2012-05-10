@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,66 +15,56 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.gms;
 
 import java.io.*;
 import java.net.InetAddress;
 
+import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.net.CompactEndpointSerializationHelper;
 
 /**
- * Contains information about a specified list of Endpoints and the largest version 
+ * Contains information about a specified list of Endpoints and the largest version
  * of the state they have generated as known by the local endpoint.
  */
-
 public class GossipDigest implements Comparable<GossipDigest>
 {
-    private static IVersionedSerializer<GossipDigest> serializer;
-    static
-    {
-        serializer = new GossipDigestSerializer();
-    }
-    
-    InetAddress endpoint;
-    int generation;
-    int maxVersion;
+    public static final IVersionedSerializer<GossipDigest> serializer = new GossipDigestSerializer();
 
-    public static IVersionedSerializer<GossipDigest> serializer()
-    {
-        return serializer;
-    }
-    
+    final InetAddress endpoint;
+    final int generation;
+    final int maxVersion;
+
     GossipDigest(InetAddress ep, int gen, int version)
     {
         endpoint = ep;
         generation = gen;
         maxVersion = version;
     }
-    
+
     InetAddress getEndpoint()
     {
         return endpoint;
     }
-    
+
     int getGeneration()
     {
         return generation;
     }
-    
+
     int getMaxVersion()
     {
         return maxVersion;
     }
-    
+
     public int compareTo(GossipDigest gDigest)
     {
         if ( generation != gDigest.generation )
             return ( generation - gDigest.generation );
         return (maxVersion - gDigest.maxVersion);
     }
-    
+
     public String toString()
     {
         StringBuilder sb = new StringBuilder();
@@ -88,9 +78,9 @@ public class GossipDigest implements Comparable<GossipDigest>
 }
 
 class GossipDigestSerializer implements IVersionedSerializer<GossipDigest>
-{       
+{
     public void serialize(GossipDigest gDigest, DataOutput dos, int version) throws IOException
-    {        
+    {
         CompactEndpointSerializationHelper.serialize(gDigest.endpoint, dos);
         dos.writeInt(gDigest.generation);
         dos.writeInt(gDigest.maxVersion);
@@ -104,8 +94,11 @@ class GossipDigestSerializer implements IVersionedSerializer<GossipDigest>
         return new GossipDigest(endpoint, generation, maxVersion);
     }
 
-    public long serializedSize(GossipDigest gossipDigest, int version)
+    public long serializedSize(GossipDigest gDigest, int version)
     {
-        throw new UnsupportedOperationException();
+        long size = CompactEndpointSerializationHelper.serializedSize(gDigest.endpoint);
+        size += TypeSizes.NATIVE.sizeof(gDigest.generation);
+        size += TypeSizes.NATIVE.sizeof(gDigest.maxVersion);
+        return size;
     }
 }

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,14 +15,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.net.sink;
 
 import java.net.InetAddress;
 
-import org.apache.cassandra.net.Message;
+import org.apache.cassandra.net.MessageIn;
+import org.apache.cassandra.net.MessageOut;
 
 public interface IMessageSink
 {
-    public Message handleMessage(Message message, String id, InetAddress to);
+    public MessageOut handleMessage(MessageOut message, String id, InetAddress to);
+
+    public MessageIn handleMessage(MessageIn message, String id, InetAddress to);
 }

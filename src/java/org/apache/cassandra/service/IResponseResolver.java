@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,34 +15,34 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.service;
 
 import java.io.IOException;
 
-import org.apache.cassandra.net.Message;
+import org.apache.cassandra.db.ReadResponse;
+import org.apache.cassandra.net.MessageIn;
 
-public interface IResponseResolver<T> {
+public interface IResponseResolver<TMessage, TResolved> {
 
-	/**
-	 * This Method resolves the responses that are passed in . for example : if
-	 * its write response then all we get is true or false return values which
-	 * implies if the writes were successful but for reads its more complicated
-	 * you need to look at the responses and then based on differences schedule
-	 * repairs . Hence you need to derive a response resolver based on your
-	 * needs from this interface.
-	 */
-	public T resolve() throws DigestMismatchException, IOException;
+    /**
+     * This Method resolves the responses that are passed in . for example : if
+     * its write response then all we get is true or false return values which
+     * implies if the writes were successful but for reads its more complicated
+     * you need to look at the responses and then based on differences schedule
+     * repairs . Hence you need to derive a response resolver based on your
+     * needs from this interface.
+     */
+    public TResolved resolve() throws DigestMismatchException, IOException;
 
-	public boolean isDataPresent();
+    public boolean isDataPresent();
 
     /**
      * returns the data response without comparing with any digests
      */
-    public T getData() throws IOException;
+    public TResolved getData() throws IOException;
 
-    public void preprocess(Message message);
-    public Iterable<Message> getMessages();
+    public void preprocess(MessageIn<TMessage> message);
+    public Iterable<MessageIn<TMessage>> getMessages();
 
     public int getMaxLiveColumns();
 }

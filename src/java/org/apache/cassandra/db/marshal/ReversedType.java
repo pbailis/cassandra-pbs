@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -7,14 +7,13 @@
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.apache.cassandra.db.marshal;
 
@@ -28,25 +27,25 @@ import org.apache.cassandra.config.ConfigurationException;
 public class ReversedType<T> extends AbstractType<T>
 {
     // interning instances
-    private static final Map<AbstractType, ReversedType> instances = new HashMap<AbstractType, ReversedType>();
+    private static final Map<AbstractType<?>, ReversedType> instances = new HashMap<AbstractType<?>, ReversedType>();
 
     // package protected for unit tests sake
     final AbstractType<T> baseType;
 
     public static <T> ReversedType<T> getInstance(TypeParser parser) throws ConfigurationException
     {
-        List<AbstractType> types = parser.getTypeParameters();
+        List<AbstractType<?>> types = parser.getTypeParameters();
         if (types.size() != 1)
             throw new ConfigurationException("ReversedType takes exactly one argument, " + types.size() + " given");
-        return getInstance(types.get(0));
+        return getInstance((AbstractType<T>) types.get(0));
     }
 
     public static synchronized <T> ReversedType<T> getInstance(AbstractType<T> baseType)
     {
-        ReversedType type = instances.get(baseType);
+        ReversedType<T> type = instances.get(baseType);
         if (type == null)
         {
-            type = new ReversedType(baseType);
+            type = new ReversedType<T>(baseType);
             instances.put(baseType, type);
         }
         return (ReversedType<T>) type;

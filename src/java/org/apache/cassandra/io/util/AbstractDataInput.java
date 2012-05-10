@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,17 +7,14 @@
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-
 package org.apache.cassandra.io.util;
 
 import java.io.*;
@@ -191,7 +187,7 @@ public abstract class AbstractDataInput extends InputStream implements DataInput
      * @throws IOException
      *             if this file is closed or another I/O error occurs.
      */
-    public final int readInt() throws IOException {
+    public int readInt() throws IOException {
         byte[] buffer = new byte[4];
         if (read(buffer, 0, buffer.length) != buffer.length) {
             throw new EOFException();
@@ -255,7 +251,7 @@ public abstract class AbstractDataInput extends InputStream implements DataInput
      * @throws IOException
      *             if this file is closed or another I/O error occurs.
      */
-    public final long readLong() throws IOException {
+    public long readLong() throws IOException {
         byte[] buffer = new byte[8];
         int n = read(buffer, 0, buffer.length);
         if (n != buffer.length) {
@@ -280,7 +276,7 @@ public abstract class AbstractDataInput extends InputStream implements DataInput
      * @throws IOException
      *             if this file is closed or another I/O error occurs.
      */
-    public final short readShort() throws IOException {
+    public short readShort() throws IOException {
         byte[] buffer = new byte[2];
         if (read(buffer, 0, buffer.length) != buffer.length) {
             throw new EOFException();
@@ -318,7 +314,7 @@ public abstract class AbstractDataInput extends InputStream implements DataInput
      * @throws IOException
      *             if this file is closed or another I/O error occurs.
      */
-    public final int readUnsignedShort() throws IOException {
+    public int readUnsignedShort() throws IOException {
         byte[] buffer = new byte[2];
         if (read(buffer, 0, buffer.length) != buffer.length) {
             throw new EOFException();

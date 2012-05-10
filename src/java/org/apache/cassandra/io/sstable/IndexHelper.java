@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.io.sstable;
 
 import java.io.*;
@@ -25,6 +24,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 
+import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.db.marshal.AbstractType;
 import org.apache.cassandra.io.util.FileDataInput;
 import org.apache.cassandra.io.util.FileMark;
@@ -89,11 +89,11 @@ public class IndexHelper
      * @return ArrayList<IndexInfo> - list of de-serialized indexes
      * @throws IOException if an I/O error occurs.
      */
-	public static ArrayList<IndexInfo> deserializeIndex(FileDataInput in) throws IOException
-	{
-		int columnIndexSize = in.readInt();
+    public static List<IndexInfo> deserializeIndex(FileDataInput in) throws IOException
+    {
+        int columnIndexSize = in.readInt();
         if (columnIndexSize == 0)
-            return null;
+            return Collections.<IndexInfo>emptyList();
         ArrayList<IndexInfo> indexList = new ArrayList<IndexInfo>();
         FileMark mark = in.mark();
         while (in.bytesPastMark(mark) < columnIndexSize)
@@ -103,11 +103,11 @@ public class IndexHelper
         assert in.bytesPastMark(mark) == columnIndexSize;
 
         return indexList;
-	}
+    }
 
-    public static Filter defreezeBloomFilter(FileDataInput file, boolean usesOldBloomFilter) throws IOException
+    public static Filter defreezeBloomFilter(FileDataInput file, FilterFactory.Type type) throws IOException
     {
-        return defreezeBloomFilter(file, Integer.MAX_VALUE, usesOldBloomFilter);
+        return defreezeBloomFilter(file, Integer.MAX_VALUE, type);
     }
 
     /**
@@ -115,14 +115,14 @@ public class IndexHelper
      *
      * @param file - source file
      * @param maxSize - sanity check: if filter claimes to be larger than this it is bogus
-     * @param useOldBuffer - do we need to reuse old buffer?
+     * @param type - Bloom Filter type.
      *
      * @return bloom filter summarizing the column information
      * @throws java.io.IOException if an I/O error occurs.
      * Guarantees that file's current position will be just after the bloom filter, even if
      * the filter cannot be deserialized, UNLESS EOFException is thrown.
      */
-    public static Filter defreezeBloomFilter(FileDataInput file, long maxSize, boolean useOldBuffer) throws IOException
+    public static Filter defreezeBloomFilter(FileDataInput file, long maxSize, FilterFactory.Type type) throws IOException
     {
         int size = file.readInt();
         if (size > maxSize || size <= 0)
@@ -130,9 +130,7 @@ public class IndexHelper
         ByteBuffer bytes = file.readBytes(size);
 
         DataInputStream stream = new DataInputStream(ByteBufferUtil.inputStream(bytes));
-        return useOldBuffer
-               ? LegacyBloomFilter.serializer().deserialize(stream)
-               : BloomFilter.serializer().deserialize(stream);
+        return FilterFactory.deserialize(stream, type);
     }
 
     /**
@@ -152,7 +150,7 @@ public class IndexHelper
      *
      * @return int index
      */
-    public static int indexFor(ByteBuffer name, List<IndexInfo> indexList, AbstractType comparator, boolean reversed)
+    public static int indexFor(ByteBuffer name, List<IndexInfo> indexList, AbstractType<?> comparator, boolean reversed)
     {
         if (name.remaining() == 0 && reversed)
             return indexList.size() - 1;
@@ -174,7 +172,7 @@ public class IndexHelper
         return index < 0 ? -index - (reversed ? 2 : 1) : index;
     }
 
-    public static Comparator<IndexInfo> getComparator(final AbstractType nameComparator, boolean reversed)
+    public static Comparator<IndexInfo> getComparator(final AbstractType<?> nameComparator, boolean reversed)
     {
         return reversed ? nameComparator.indexReverseComparator : nameComparator.indexComparator;
     }
@@ -202,12 +200,16 @@ public class IndexHelper
             dos.writeLong(width);
         }
 
-        public int serializedSize()
+        public int serializedSize(TypeSizes typeSizes)
         {
-            return 2 + firstName.remaining() + 2 + lastName.remaining() + 8 + 8;
+            int firstNameSize = firstName.remaining();
+            int lastNameSize = lastName.remaining();
+            return typeSizes.sizeof((short) firstNameSize) + firstNameSize +
+                   typeSizes.sizeof((short) lastNameSize) + lastNameSize +
+                   typeSizes.sizeof(offset) + typeSizes.sizeof(width);
         }
 
-        public static IndexInfo deserialize(FileDataInput dis) throws IOException
+        public static IndexInfo deserialize(DataInput dis) throws IOException
         {
             return new IndexInfo(ByteBufferUtil.readWithShortLength(dis), ByteBufferUtil.readWithShortLength(dis), dis.readLong(), dis.readLong());
         }

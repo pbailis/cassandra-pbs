@@ -29,6 +29,11 @@ max_hint_window_in_ms: 3600000 # one hour
 # Sleep this long after delivering each hint
 hinted_handoff_throttle_delay_in_ms: 1
 
+# The following setting populates the page cache on memtable flush and compaction
+# WARNING: Enable this setting only when the whole node's data fits in memory.
+# Defaults to: false
+# populate_io_cache_on_flush: false
+
 # authentication backend, implementing IAuthenticator; used to identify users
 authenticator: org.apache.cassandra.auth.AllowAllAuthenticator
 
@@ -77,8 +82,8 @@ commitlog_directory: /var/lib/cassandra/commitlog
 #
 # NOTE: if you reduce the size, you may not get you hottest keys loaded on startup.
 #
-# Default value is 2 (call hold > 200000 keys). Set to 0 to disable key cache.
-key_cache_size_in_mb: 2
+# Default value is empty to make it "auto" (min(5% of Heap (in MB), 100MB)). Set to 0 to disable key cache.
+key_cache_size_in_mb:
 
 # Duration in seconds after which Cassandra should
 # safe the keys cache. Caches are saved to saved_caches_directory as
@@ -149,6 +154,14 @@ saved_caches_directory: /var/lib/cassandra/saved_caches
 # milliseconds.
 commitlog_sync: periodic
 commitlog_sync_period_in_ms: 10000
+
+# Configure  the Size of the individual Commitlog file. The 
+# default is 128 MB, which is almost always fine, but if you are
+# archiving commitlog segments (see commitlog_archiving.properties),
+# then you probably want a finer granularity of archiving; 16 MB
+# is reasonable.
+#
+# commitlog_segment_size_in_mb: 128
 
 # any class that implements the SeedProvider interface and has a
 # constructor that takes a Map<String, String> of parameters will do.
@@ -223,9 +236,13 @@ concurrent_writes: 32
 # the maximum number of secondary indexes created on a single CF.
 memtable_flush_queue_size: 4
 
-# Buffer size to use when performing contiguous column slices. 
-# Increase this to the size of the column slices you typically perform
-sliced_buffer_size_in_kb: 64
+# Whether to, when doing sequential writing, fsync() at intervals in
+# order to force the operating system to flush the dirty
+# buffers. Enable this to avoid sudden dirty buffer flushing from
+# impacting read latencies. Almost always a good idea on SSD:s; not
+# necessarily on platters.
+trickle_fsync: false
+trickle_fsync_interval_in_kb: 10240
 
 # TCP port, for commands and data
 storage_port: 7000
@@ -322,6 +339,12 @@ incremental_backups: false
 # is a data format change.
 snapshot_before_compaction: false
 
+# Whether or not a snapshot is taken of the data before keyspace truncation
+# or dropping of column families. The STRONGLY advised default of true 
+# should be used to provide data safety. If you set this flag to false, you will
+# lose data on truncation or drop.
+auto_snapshot: true
+
 # Add column indexes to a row after its contents reach this size.
 # Increase if your column values are large, or if you have a very large
 # number of columns.  The competing causes are, Cassandra has to
@@ -381,25 +404,62 @@ compaction_preheat_key_cache: true
 # Time to wait for a reply from other nodes before failing the command 
 rpc_timeout_in_ms: 10000
 
+# Enable socket timeout for streaming operation.
+# When a timeout occurs during streaming, streaming is retried from the start
+# of the current file. This *can* involve re-streaming an important amount of
+# data, so you should avoid setting the value too low.
+# Default value is 0, which never timeout streams.
+# streaming_socket_timeout_in_ms: 0
+
 # phi value that must be reached for a host to be marked down.
 # most users should never need to adjust this.
 # phi_convict_threshold: 8
 
 # endpoint_snitch -- Set this to a class that implements
-# IEndpointSnitch, which will let Cassandra know enough
-# about your network topology to route requests efficiently.
+# IEndpointSnitch.  The snitch has two functions:
+# - it teaches Cassandra enough about your network topology to route
+#   requests efficiently
+# - it allows Cassandra to spread replicas around your cluster to avoid
+#   correlated failures. It does this by grouping machines into
+#   "datacenters" and "racks."  Cassandra will do its best not to have
+#   more than one replica on the same "rack" (which may not actually
+#   be a physical location)
+#
+# IF YOU CHANGE THE SNITCH AFTER DATA IS INSERTED INTO THE CLUSTER,
+# YOU MUST RUN A FULL REPAIR, SINCE THE SNITCH AFFECTS WHERE REPLICAS
+# ARE PLACED.
+#
 # Out of the box, Cassandra provides
-#  - org.apache.cassandra.locator.SimpleSnitch:
+#  - SimpleSnitch:
 #    Treats Strategy order as proximity. This improves cache locality
 #    when disabling read repair, which can further improve throughput.
-#  - org.apache.cassandra.locator.RackInferringSnitch:
+#    Only appropriate for single-datacenter deployments.
+#  - PropertyFileSnitch:
+#    Proximity is determined by rack and data center, which are
+#    explicitly configured in cassandra-topology.properties.
+#  - RackInferringSnitch:
 #    Proximity is determined by rack and data center, which are
 #    assumed to correspond to the 3rd and 2nd octet of each node's
-#    IP address, respectively
-# org.apache.cassandra.locator.PropertyFileSnitch:
-#  - Proximity is determined by rack and data center, which are
-#    explicitly configured in cassandra-topology.properties.
-endpoint_snitch: org.apache.cassandra.locator.SimpleSnitch
+#    IP address, respectively.  Unless this happens to match your
+#    deployment conventions (as it did Facebook's), this is best used
+#    as an example of writing a custom Snitch class.
+#  - Ec2Snitch:
+#    Appropriate for EC2 deployments in a single Region.  Loads Region
+#    and Availability Zone information from the EC2 API. The Region is
+#    treated as the Datacenter, and the Availability Zone as the rack.
+#    Only private IPs are used, so this will not work across multiple
+#    Regions.
+#  - Ec2MultiRegionSnitch:
+#    Uses public IPs as broadcast_address to allow cross-region
+#    connectivity.  (Thus, you should set seed addresses to the public
+#    IP as well.) You will need to open the storage_port or
+#    ssl_storage_port on the public IP firewall.  (For intra-Region
+#    traffic, Cassandra will switch to the private IP after
+#    establishing a connection.)
+#
+# You can use a custom Snitch by setting this to the full class name
+# of the snitch, which will be assumed to be on your classpath.
+endpoint_snitch: SimpleSnitch
 
 # controls how often to perform the more expensive part of host score
 # calculation

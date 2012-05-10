@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,11 +15,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.io.util;
 
 import java.io.*;
 import java.text.DecimalFormat;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 
@@ -32,12 +32,13 @@ import org.apache.cassandra.utils.WrappedRunnable;
 
 public class FileUtils
 {
-    private static Logger logger_ = LoggerFactory.getLogger(FileUtils.class);
-    private static final DecimalFormat df_ = new DecimalFormat("#.##");
-    private static final double kb_ = 1024d;
-    private static final double mb_ = 1024*1024d;
-    private static final double gb_ = 1024*1024*1024d;
-    private static final double tb_ = 1024*1024*1024*1024d;
+    private static final Logger logger = LoggerFactory.getLogger(FileUtils.class);
+    private static final double KB = 1024d;
+    private static final double MB = 1024*1024d;
+    private static final double GB = 1024*1024*1024d;
+    private static final double TB = 1024*1024*1024*1024d;
+
+    private static final DecimalFormat df = new DecimalFormat("#.##");
 
     public static void deleteWithConfirm(String file) throws IOException
     {
@@ -47,19 +48,19 @@ public class FileUtils
     public static void deleteWithConfirm(File file) throws IOException
     {
         assert file.exists() : "attempted to delete non-existing file " + file.getName();
-        if (logger_.isDebugEnabled())
-            logger_.debug("Deleting " + file.getName());
+        if (logger.isDebugEnabled())
+            logger.debug("Deleting " + file.getName());
         if (!file.delete())
         {
             throw new IOException("Failed to delete " + file.getAbsolutePath());
         }
     }
-    
+
     public static void renameWithConfirm(File from, File to) throws IOException
     {
         assert from.exists();
-        if (logger_.isDebugEnabled())
-            logger_.debug((String.format("Renaming %s to %s", from.getPath(), to.getPath())));
+        if (logger.isDebugEnabled())
+            logger.debug((String.format("Renaming %s to %s", from.getPath(), to.getPath())));
         if (!from.renameTo(to))
             throw new IOException(String.format("Failed to rename %s to %s", from.getPath(), to.getPath()));
     }
@@ -94,8 +95,13 @@ public class FileUtils
         }
         catch (Exception e)
         {
-            logger_.warn("Failed closing " + c, e);
+            logger.warn("Failed closing " + c, e);
         }
+    }
+
+    public static void close(Closeable... cs) throws IOException
+    {
+        close(Arrays.asList(cs));
     }
 
     public static void close(Iterable<? extends Closeable> cs) throws IOException
@@ -111,7 +117,7 @@ public class FileUtils
             catch (IOException ex)
             {
                 e = ex;
-                logger_.warn("Failed closing stream " + c, ex);
+                logger.warn("Failed closing stream " + c, ex);
             }
         }
         if (e != null)
@@ -148,23 +154,6 @@ public class FileUtils
         return f.delete();
     }
 
-    public static boolean delete(List<String> files)
-    {
-        boolean bVal = true;
-        for ( int i = 0; i < files.size(); ++i )
-        {
-            String file = files.get(i);
-            bVal = delete(file);
-            if (bVal)
-            {
-            	if (logger_.isDebugEnabled())
-            	  logger_.debug("Deleted file {}", file);
-                files.remove(i);
-            }
-        }
-        return bVal;
-    }
-
     public static void delete(File[] files)
     {
         for ( File file : files )
@@ -188,37 +177,37 @@ public class FileUtils
     public static String stringifyFileSize(double value)
     {
         double d;
-        if ( value >= tb_ )
+        if ( value >= TB )
         {
-            d = value / tb_;
-            String val = df_.format(d);
+            d = value / TB;
+            String val = df.format(d);
             return val + " TB";
         }
-        else if ( value >= gb_ )
+        else if ( value >= GB )
         {
-            d = value / gb_;
-            String val = df_.format(d);
+            d = value / GB;
+            String val = df.format(d);
             return val + " GB";
         }
-        else if ( value >= mb_ )
+        else if ( value >= MB )
         {
-            d = value / mb_;
-            String val = df_.format(d);
+            d = value / MB;
+            String val = df.format(d);
             return val + " MB";
         }
-        else if ( value >= kb_ )
+        else if ( value >= KB )
         {
-            d = value / kb_;
-            String val = df_.format(d);
+            d = value / KB;
+            String val = df.format(d);
             return val + " KB";
         }
         else
-        {       
-            String val = df_.format(value);
+        {
+            String val = df.format(value);
             return val + " bytes";
-        }        
+        }
     }
-    
+
     /**
      * Deletes all files and subdirectories under "dir".
      * @param dir Directory to be deleted

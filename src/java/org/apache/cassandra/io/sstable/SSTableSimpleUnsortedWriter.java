@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -7,34 +7,27 @@
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.apache.cassandra.io.sstable;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.SynchronousQueue;
-import java.util.concurrent.locks.Condition;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.marshal.AbstractType;
-import org.apache.cassandra.service.StorageService;
-import org.apache.cassandra.utils.HeapAllocator;
-
-import org.apache.cassandra.utils.ByteBufferUtil;
-import org.apache.cassandra.utils.SimpleCondition;
+import org.apache.cassandra.dht.IPartitioner;
+import org.apache.cassandra.io.compress.CompressionParameters;
 
 /**
  * A SSTable writer that doesn't assume rows are in sorted order.
@@ -59,6 +52,7 @@ public class SSTableSimpleUnsortedWriter extends AbstractSSTableSimpleWriter
     /**
      * Create a new buffering writer.
      * @param directory the directory where to write the sstables
+     * @param partitioner  the partitioner
      * @param keyspace the keyspace name
      * @param columnFamily the column family name
      * @param comparator the column family comparator
@@ -68,20 +62,33 @@ public class SSTableSimpleUnsortedWriter extends AbstractSSTableSimpleWriter
      * columns you add). For 1GB of heap, a 128 bufferSizeInMB is probably a reasonable choice. If you experience OOM, this value should be lowered.
      */
     public SSTableSimpleUnsortedWriter(File directory,
+                                       IPartitioner partitioner,
                                        String keyspace,
                                        String columnFamily,
-                                       AbstractType comparator,
-                                       AbstractType subComparator,
-                                       int bufferSizeInMB) throws IOException
+                                       AbstractType<?> comparator,
+                                       AbstractType<?> subComparator,
+                                       int bufferSizeInMB,
+                                       CompressionParameters compressParameters) throws IOException
     {
-        super(directory, new CFMetaData(keyspace, columnFamily, subComparator == null ? ColumnFamilyType.Standard : ColumnFamilyType.Super, comparator, subComparator));
+        super(directory, new CFMetaData(keyspace, columnFamily, subComparator == null ? ColumnFamilyType.Standard : ColumnFamilyType.Super, comparator, subComparator).compressionParameters(compressParameters), partitioner);
         this.bufferSize = bufferSizeInMB * 1024L * 1024L;
         this.diskWriter.start();
     }
 
+    public SSTableSimpleUnsortedWriter(File directory,
+                                       IPartitioner partitioner,
+                                       String keyspace,
+                                       String columnFamily,
+                                       AbstractType<?> comparator,
+                                       AbstractType<?> subComparator,
+                                       int bufferSizeInMB) throws IOException
+    {
+        this(directory, partitioner, keyspace, columnFamily, comparator, subComparator, bufferSizeInMB, new CompressionParameters(null));
+    }
+
     protected void writeRow(DecoratedKey key, ColumnFamily columnFamily) throws IOException
     {
-        currentSize += key.key.remaining() + columnFamily.serializedSize() * 1.2;
+        currentSize += key.key.remaining() + ColumnFamily.serializer.serializedSize(columnFamily, TypeSizes.NATIVE) * 1.2;
 
         if (currentSize > bufferSize)
             sync();
@@ -100,7 +107,7 @@ public class SSTableSimpleUnsortedWriter extends AbstractSSTableSimpleWriter
         {
             // We will reuse a CF that we have counted already. But because it will be easier to add the full size
             // of the CF in the next writeRow call than to find out the delta, we just remove the size until that next call
-            currentSize -= currentKey.key.remaining() + previous.serializedSize() * 1.2;
+            currentSize -= currentKey.key.remaining() + ColumnFamily.serializer.serializedSize(previous, TypeSizes.NATIVE) * 1.2;
         }
         return previous;
     }
@@ -161,6 +168,7 @@ public class SSTableSimpleUnsortedWriter extends AbstractSSTableSimpleWriter
 
         public void run()
         {
+            SSTableWriter writer = null;
             try
             {
                 while (true)
@@ -169,7 +177,7 @@ public class SSTableSimpleUnsortedWriter extends AbstractSSTableSimpleWriter
                     if (b == SENTINEL)
                         return;
 
-                    SSTableWriter writer = getWriter();
+                    writer = getWriter();
                     for (Map.Entry<DecoratedKey, ColumnFamily> entry : b.entrySet())
                         writer.append(entry.getKey(), entry.getValue());
                     writer.closeAndOpenReader();
@@ -177,6 +185,8 @@ public class SSTableSimpleUnsortedWriter extends AbstractSSTableSimpleWriter
             }
             catch (Exception e)
             {
+                if (writer != null)
+                    writer.abort();
                 exception = e;
             }
         }

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -51,10 +51,10 @@ public class SliceByNamesReadCommand extends ReadCommand
         readCommand.setDigestQuery(isDigestQuery());
         return readCommand;
     }
-    
+
     public Row getRow(Table table) throws IOException
     {
-        DecoratedKey<?> dk = StorageService.getPartitioner().decorateKey(key);
+        DecoratedKey dk = StorageService.getPartitioner().decorateKey(key);
         return table.getRow(QueryFilter.getNamesFilter(dk, queryPath, columnNames));
     }
 
@@ -98,7 +98,7 @@ class SliceByNamesReadCommandSerializer implements IVersionedSerializer<ReadComm
         QueryPath columnParent = QueryPath.deserialize(dis);
 
         int size = dis.readInt();
-        List<ByteBuffer> columns = new ArrayList<ByteBuffer>();
+        List<ByteBuffer> columns = new ArrayList<ByteBuffer>(size);
         for (int i = 0; i < size; ++i)
         {
             columns.add(ByteBufferUtil.readWithShortLength(dis));
@@ -110,16 +110,22 @@ class SliceByNamesReadCommandSerializer implements IVersionedSerializer<ReadComm
 
     public long serializedSize(ReadCommand cmd, int version)
     {
+        TypeSizes sizes = TypeSizes.NATIVE;
         SliceByNamesReadCommand command = (SliceByNamesReadCommand) cmd;
-        int size = DBConstants.boolSize;
-        size += DBConstants.shortSize + FBUtilities.encodedUTF8Length(command.table);
-        size += DBConstants.shortSize + command.key.remaining();
-        size += command.queryPath.serializedSize();
-        size += DBConstants.intSize;
+        int size = sizes.sizeof(command.isDigestQuery());
+        int keySize = command.key.remaining();
+
+        size += sizes.sizeof(command.table);
+        size += sizes.sizeof(keySize) + keySize;
+        size += command.queryPath.serializedSize(sizes);
+        size += sizes.sizeof(command.columnNames.size());
         if (!command.columnNames.isEmpty())
         {
             for (ByteBuffer cName : command.columnNames)
-                size += DBConstants.shortSize + cName.remaining();
+            {
+                int cNameSize = cName.remaining();
+                size += sizes.sizeof((short) cNameSize) + cNameSize;
+            }
         }
         return size;
     }

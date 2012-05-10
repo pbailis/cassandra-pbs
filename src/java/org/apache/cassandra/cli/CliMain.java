@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.cli;
 
 import java.io.BufferedReader;
@@ -44,9 +43,9 @@ public class CliMain
 
     private static TTransport transport = null;
     private static Cassandra.Client thriftClient = null;
-    public  static CliSessionState sessionState = new CliSessionState();
+    public  static final CliSessionState sessionState = new CliSessionState();
     private static CliClient cliClient;
-    private static CliCompleter completer = new CliCompleter();
+    private static final CliCompleter completer = new CliCompleter();
     private static int lineNumber = 1;
 
     /**
@@ -57,7 +56,6 @@ public class CliMain
      */
     public static void connect(String server, int port)
     {
-
         TSocket socket = new TSocket(server, port);
 
         if (transport != null)
@@ -67,7 +65,7 @@ public class CliMain
         {
             transport = new TFramedTransport(socket);
         }
-        else 
+        else
         {
             transport = socket;
         }
@@ -89,7 +87,7 @@ public class CliMain
 
         thriftClient = cassandraClient;
         cliClient = new CliClient(sessionState, thriftClient);
-        
+
         if ((sessionState.username != null) && (sessionState.password != null))
         {
             // Authenticate
@@ -106,7 +104,7 @@ public class CliMain
             {
                 thriftClient = null;
                 sessionState.err.println("Exception during authentication to the cassandra node, " +
-                		"Verify the keyspace exists, and that you are using the correct credentials.");
+                                         "Verify the keyspace exists, and that you are using the correct credentials.");
                 return;
             }
             catch (AuthorizationException e)
@@ -122,7 +120,7 @@ public class CliMain
                 return;
             }
         }
-        
+
         if (sessionState.keyspace != null)
         {
             try
@@ -193,7 +191,7 @@ public class CliMain
         }
         return true;
     }
-    
+
     public static void updateCompletor(Set<String> candidates)
     {
         Set<String> actions = new HashSet<String>();
@@ -202,9 +200,9 @@ public class CliMain
             for (String cmd : completer.getKeyspaceCommands())
                 actions.add(String.format("%s %s", cmd, cf));
         }
-        
+
         String[] strs = Arrays.copyOf(actions.toArray(), actions.toArray().length, String[].class);
-        
+
         completer.setCandidateStrings(strs);
     }
 
@@ -253,15 +251,14 @@ public class CliMain
         {
             try
             {
-                connect(sessionState.hostName, sessionState.thriftPort);   
+                connect(sessionState.hostName, sessionState.thriftPort);
             }
             catch (RuntimeException e)
             {
                 sessionState.err.println(e.getMessage());
-                System.exit(-1);
             }
         }
-        
+
         if ( cliClient == null )
         {
             // Connection parameter was either invalid or not present.
@@ -289,12 +286,12 @@ public class CliMain
         }
 
         ConsoleReader reader = new ConsoleReader();
-        
+
         if (!sessionState.batch)
         {
             reader.addCompletor(completer);
             reader.setBellEnabled(false);
-            
+
             String historyFile = System.getProperty("user.home") + File.separator + HISTORYFILE;
 
             try

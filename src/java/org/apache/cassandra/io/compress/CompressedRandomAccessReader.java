@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -7,14 +7,13 @@
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.apache.cassandra.io.compress;
 
@@ -22,6 +21,8 @@ import java.io.*;
 import java.nio.channels.FileChannel;
 import java.util.zip.CRC32;
 import java.util.zip.Checksum;
+
+import com.google.common.primitives.Ints;
 
 import org.apache.cassandra.io.util.RandomAccessReader;
 import org.apache.cassandra.utils.FBUtilities;
@@ -88,14 +89,16 @@ public class CompressedRandomAccessReader extends RandomAccessReader
 
         validBufferBytes = metadata.compressor().uncompress(compressed, 0, chunk.length, buffer, 0);
 
-        checksum.update(buffer, 0, validBufferBytes);
+        if (metadata.parameters.crcChance > FBUtilities.threadLocalRandom().nextDouble())
+        {
+            checksum.update(buffer, 0, validBufferBytes);
 
-        if (checksum(chunk) != (int) checksum.getValue())
-            throw new CorruptedBlockException(getPath(), chunk);
+            if (checksum(chunk) != (int) checksum.getValue())
+                throw new CorruptedBlockException(getPath(), chunk);
 
-        // reset checksum object back to the original (blank) state
-        checksum.reset();
-
+            // reset checksum object back to the original (blank) state
+            checksum.reset();
+        }
 
         // buffer offset is always aligned
         bufferOffset = current & ~(buffer.length - 1);
@@ -111,7 +114,7 @@ public class CompressedRandomAccessReader extends RandomAccessReader
                                                 chunk.offset,
                                                 chunk.length));
 
-        return FBUtilities.byteArrayToInt(checksumBytes);
+        return Ints.fromByteArray(checksumBytes);
     }
 
     @Override

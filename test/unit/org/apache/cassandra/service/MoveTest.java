@@ -19,18 +19,21 @@
 
 package org.apache.cassandra.service;
 
+import java.io.IOException;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.*;
 
-import org.apache.cassandra.config.ConfigurationException;
-import org.apache.cassandra.config.Schema;
-import org.junit.Test;
-
-import static org.junit.Assert.*;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.Multimap;
-import org.apache.cassandra.CleanupHelper;
+import static org.junit.Assert.*;
+import org.junit.AfterClass;
+import org.junit.BeforeClass;
+import org.junit.Test;
+
+import org.apache.cassandra.config.ConfigurationException;
+import org.apache.cassandra.config.Schema;
+import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.Util;
 import org.apache.cassandra.config.KSMetaData;
 import org.apache.cassandra.dht.*;
@@ -40,8 +43,31 @@ import org.apache.cassandra.locator.AbstractReplicationStrategy;
 import org.apache.cassandra.locator.SimpleSnitch;
 import org.apache.cassandra.locator.TokenMetadata;
 
-public class MoveTest extends CleanupHelper
+public class MoveTest
 {
+    private static final IPartitioner partitioner = new RandomPartitioner();
+    private static IPartitioner oldPartitioner;
+
+    /*
+     * NOTE: the tests above uses RandomPartitioner, which is not the default
+     * test partitioner. Changing the partitioner should be done before
+     * loading the schema as loading the schema trigger the write of sstables.
+     * So instead of extending SchemaLoader, we call it's method below.
+     */
+    @BeforeClass
+    public static void setup() throws IOException
+    {
+        oldPartitioner = StorageService.instance.setPartitionerUnsafe(partitioner);
+        SchemaLoader.loadSchema();
+    }
+
+    @AfterClass
+    public static void tearDown()
+    {
+        StorageService.instance.setPartitionerUnsafe(oldPartitioner);
+        SchemaLoader.stopGossiper();
+    }
+
     /*
      * Test whether write endpoints is correct when the node is moving. Uses
      * StorageService.onChange and does not manipulate token metadata directly.
@@ -55,16 +81,14 @@ public class MoveTest extends CleanupHelper
 
         TokenMetadata tmd = ss.getTokenMetadata();
         tmd.clearUnsafe();
-        IPartitioner partitioner = new RandomPartitioner();
         VersionedValue.VersionedValueFactory valueFactory = new VersionedValue.VersionedValueFactory(partitioner);
-
-        IPartitioner oldPartitioner = ss.setPartitionerUnsafe(partitioner);
 
         ArrayList<Token> endpointTokens = new ArrayList<Token>();
         ArrayList<Token> keyTokens = new ArrayList<Token>();
         List<InetAddress> hosts = new ArrayList<InetAddress>();
+        List<UUID> hostIds = new ArrayList<UUID>();
 
-        Util.createInitialRing(ss, partitioner, endpointTokens, keyTokens, hosts, RING_SIZE);
+        Util.createInitialRing(ss, partitioner, endpointTokens, keyTokens, hosts, hostIds, RING_SIZE);
 
         Map<Token, List<InetAddress>> expectedEndpoints = new HashMap<Token, List<InetAddress>>();
         for (String table : Schema.instance.getNonSystemTables())
@@ -110,8 +134,7 @@ public class MoveTest extends CleanupHelper
         }
 
         // moving endpoint back to the normal state
-        ss.onChange(hosts.get(MOVING_NODE), ApplicationState.STATUS, valueFactory.normal(newToken));
-        ss.setPartitionerUnsafe(oldPartitioner);
+        ss.onChange(hosts.get(MOVING_NODE), ApplicationState.STATUS, valueFactory.normal(newToken, hostIds.get(MOVING_NODE)));
     }
 
     /*
@@ -127,14 +150,13 @@ public class MoveTest extends CleanupHelper
         IPartitioner partitioner = new RandomPartitioner();
         VersionedValue.VersionedValueFactory valueFactory = new VersionedValue.VersionedValueFactory(partitioner);
 
-        IPartitioner oldPartitioner = ss.setPartitionerUnsafe(partitioner);
-
         ArrayList<Token> endpointTokens = new ArrayList<Token>();
         ArrayList<Token> keyTokens = new ArrayList<Token>();
         List<InetAddress> hosts = new ArrayList<InetAddress>();
+        List<UUID> hostIds = new ArrayList<UUID>();
 
         // create a ring or 10 nodes
-        Util.createInitialRing(ss, partitioner, endpointTokens, keyTokens, hosts, RING_SIZE);
+        Util.createInitialRing(ss, partitioner, endpointTokens, keyTokens, hosts, hostIds, RING_SIZE);
 
         // nodes 6, 8 and 9 leave
         final int[] MOVING = new int[] {6, 8, 9};
@@ -157,9 +179,9 @@ public class MoveTest extends CleanupHelper
 
         // boot two new nodes with keyTokens.get(5) and keyTokens.get(7)
         InetAddress boot1 = InetAddress.getByName("127.0.1.1");
-        ss.onChange(boot1, ApplicationState.STATUS, valueFactory.bootstrapping(keyTokens.get(5)));
+        ss.onChange(boot1, ApplicationState.STATUS, valueFactory.bootstrapping(keyTokens.get(5), UUID.randomUUID()));
         InetAddress boot2 = InetAddress.getByName("127.0.1.2");
-        ss.onChange(boot2, ApplicationState.STATUS, valueFactory.bootstrapping(keyTokens.get(7)));
+        ss.onChange(boot2, ApplicationState.STATUS, valueFactory.bootstrapping(keyTokens.get(7), UUID.randomUUID()));
 
         // don't require test update every time a new keyspace is added to test/conf/cassandra.yaml
         Map<String, AbstractReplicationStrategy> tableStrategyMap = new HashMap<String, AbstractReplicationStrategy>();
@@ -445,10 +467,8 @@ public class MoveTest extends CleanupHelper
         // all moving nodes are back to the normal state
         for (Integer movingIndex : MOVING)
         {
-            ss.onChange(hosts.get(movingIndex), ApplicationState.STATUS, valueFactory.normal(newTokens.get(movingIndex)));
+            ss.onChange(hosts.get(movingIndex), ApplicationState.STATUS, valueFactory.normal(newTokens.get(movingIndex), hostIds.get(movingIndex)));
         }
-
-        ss.setPartitionerUnsafe(oldPartitioner);
     }
 
     @Test
@@ -460,14 +480,13 @@ public class MoveTest extends CleanupHelper
         IPartitioner partitioner = new RandomPartitioner();
         VersionedValue.VersionedValueFactory valueFactory = new VersionedValue.VersionedValueFactory(partitioner);
 
-        IPartitioner oldPartitioner = ss.setPartitionerUnsafe(partitioner);
-
         ArrayList<Token> endpointTokens = new ArrayList<Token>();
         ArrayList<Token> keyTokens = new ArrayList<Token>();
         List<InetAddress> hosts = new ArrayList<InetAddress>();
+        List<UUID> hostIds = new ArrayList<UUID>();
 
         // create a ring or 6 nodes
-        Util.createInitialRing(ss, partitioner, endpointTokens, keyTokens, hosts, 6);
+        Util.createInitialRing(ss, partitioner, endpointTokens, keyTokens, hosts, hostIds, 6);
 
         // node 2 leaves
         Token newToken = positionToken(7);
@@ -477,7 +496,7 @@ public class MoveTest extends CleanupHelper
         assertTrue(tmd.getToken(hosts.get(2)).equals(endpointTokens.get(2)));
 
         // back to normal
-        ss.onChange(hosts.get(2), ApplicationState.STATUS, valueFactory.normal(newToken));
+        ss.onChange(hosts.get(2), ApplicationState.STATUS, valueFactory.normal(newToken, hostIds.get(2)));
 
         assertTrue(tmd.getMovingEndpoints().isEmpty());
         assertTrue(tmd.getToken(hosts.get(2)).equals(newToken));
@@ -485,13 +504,11 @@ public class MoveTest extends CleanupHelper
         newToken = positionToken(8);
         // node 2 goes through leave and left and then jumps to normal at its new token
         ss.onChange(hosts.get(2), ApplicationState.STATUS, valueFactory.moving(newToken));
-        ss.onChange(hosts.get(2), ApplicationState.STATUS, valueFactory.normal(newToken));
+        ss.onChange(hosts.get(2), ApplicationState.STATUS, valueFactory.normal(newToken, hostIds.get(2)));
 
         assertTrue(tmd.getBootstrapTokens().isEmpty());
         assertTrue(tmd.getMovingEndpoints().isEmpty());
         assertTrue(tmd.getToken(hosts.get(2)).equals(newToken));
-
-        ss.setPartitionerUnsafe(oldPartitioner);
     }
 
     private static Collection<InetAddress> makeAddrs(String... hosts) throws UnknownHostException

@@ -18,12 +18,12 @@
 
 package org.apache.cassandra.cli;
 
-import org.apache.cassandra.CleanupHelper;
+import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.config.ConfigurationException;
+import org.apache.cassandra.config.Schema;
 import org.apache.cassandra.service.EmbeddedCassandraService;
 import org.apache.cassandra.thrift.*;
 import org.apache.thrift.TException;
-import org.apache.thrift.transport.TTransportException;
 import org.junit.Test;
 
 import java.io.ByteArrayOutputStream;
@@ -34,7 +34,7 @@ import java.util.regex.Pattern;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
-public class CliTest extends CleanupHelper
+public class CliTest extends SchemaLoader
 {
     // please add new statements here so they could be auto-runned by this test.
     private String[] statements = {
@@ -54,8 +54,11 @@ public class CliTest extends CleanupHelper
         "list 123;",
         "list 123[:];",
         "list 123[456:];",
-        "list 123 limit 5",
-        "list 123[12:15] limit 20",
+        "list 123 limit 5;",
+        "list 123[12:15] limit 20;",
+        "list 123[12:15] columns 2;",
+        "list 123 columns 2 reversed;",
+        "list 123 limit 10 columns 2 reversed;",
         "get 123[hello][-31337];",
         "get 123[hello][world];",
         "get 123[hello][test_quote];",
@@ -163,8 +166,8 @@ public class CliTest extends CleanupHelper
         "create column family myCF with column_type='Super' and comparator='UTF8Type' AND subcomparator='UTF8Type' AND default_validation_class=AsciiType;",
         "assume myCF keys as utf8;",
         "create column family Countries with comparator=UTF8Type and column_metadata=[ {column_name: name, validation_class: UTF8Type} ];",
-        "set Countries[1][name] = USA;",
-        "get Countries[1][name];",
+        "set Countries[11][name] = USA;",
+        "get Countries[11][name];",
         "update column family Countries with compaction_strategy = 'org.apache.cassandra.db.compaction.SizeTieredCompactionStrategy';",
         "create column family Cities with compaction_strategy = 'org.apache.cassandra.db.compaction.SizeTieredCompactionStrategy' and compaction_strategy_options = {min_sstable_size:1024};",
         "set myCF['key']['scName']['firstname'] = 'John';",
@@ -205,10 +208,11 @@ public class CliTest extends CleanupHelper
         "show schema",
         "show schema TestKeySpace"
     };
-   
+
     @Test
     public void testCli() throws IOException, TException, ConfigurationException, ClassNotFoundException, TimedOutException, NotFoundException, SchemaDisagreementException, NoSuchFieldException, InvalidRequestException, UnavailableException, InstantiationException, IllegalAccessException
     {
+        Schema.instance.clear(); // Schema are now written on disk and will be reloaded
         new EmbeddedCassandraService().start();
 
         // new error/output streams for CliSessionState

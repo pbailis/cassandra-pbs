@@ -23,10 +23,9 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.util.concurrent.ExecutionException;
 
-import org.apache.cassandra.CleanupHelper;
+import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.Util;
 import org.apache.cassandra.db.commitlog.CommitLog;
 import org.apache.cassandra.db.filter.QueryFilter;
@@ -37,7 +36,7 @@ import org.apache.cassandra.utils.ByteBufferUtil;
 /**
  * Test for the truncate operation.
  */
-public class RecoveryManagerTruncateTest extends CleanupHelper
+public class RecoveryManagerTruncateTest extends SchemaLoader
 {
 	@Test
 	public void testTruncate() throws IOException, ExecutionException, InterruptedException

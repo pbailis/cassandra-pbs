@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -7,14 +7,13 @@
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.apache.cassandra.io.util;
 
@@ -23,6 +22,7 @@ import java.nio.channels.ClosedChannelException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 
+import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.utils.CLibrary;
 
 public class SequentialWriter extends OutputStream
@@ -51,6 +51,12 @@ public class SequentialWriter extends OutputStream
     // used if skip I/O cache was enabled
     private long ioCacheStartOffset = 0, bytesSinceCacheFlush = 0;
 
+    // whether to do trickling fsync() to avoid sudden bursts of dirty buffer flushing by kernel causing read
+    // latency spikes
+    private boolean trickleFsync;
+    private int trickleFsyncByteInterval;
+    private int bytesSinceTrickleFsync = 0;
+
     public final DataOutputStream stream;
     private MessageDigest digest;
 
@@ -62,6 +68,8 @@ public class SequentialWriter extends OutputStream
 
         buffer = new byte[bufferSize];
         this.skipIOCache = skipIOCache;
+        this.trickleFsync = DatabaseDescriptor.getTrickleFsync();
+        this.trickleFsyncByteInterval = DatabaseDescriptor.getTrickleFsyncIntervalInKb() * 1024;
         fd = CLibrary.getfd(out.getFD());
         directoryFD = CLibrary.tryOpenDirectory(file.getParent());
         stream = new DataOutputStream(this);
@@ -145,12 +153,17 @@ public class SequentialWriter extends OutputStream
         syncInternal();
     }
 
+    protected void syncDataOnlyInternal() throws IOException
+    {
+        out.getFD().sync();
+    }
+
     protected void syncInternal() throws IOException
     {
         if (syncNeeded)
         {
             flushInternal();
-            out.getFD().sync();
+            syncDataOnlyInternal();
 
             if (!directorySynced)
             {
@@ -181,6 +194,16 @@ public class SequentialWriter extends OutputStream
         {
             flushData();
 
+            if (trickleFsync)
+            {
+                bytesSinceTrickleFsync += validBufferBytes;
+                if (bytesSinceTrickleFsync >= trickleFsyncByteInterval)
+                {
+                    syncDataOnlyInternal();
+                    bytesSinceTrickleFsync = 0;
+                }
+            }
+
             if (skipIOCache)
             {
                 // we don't know when the data reaches disk since we aren't
@@ -190,7 +213,7 @@ public class SequentialWriter extends OutputStream
                 // periodically we update this starting offset
                 bytesSinceCacheFlush += validBufferBytes;
 
-                if (bytesSinceCacheFlush >= RandomAccessReader.MAX_BYTES_IN_PAGE_CACHE)
+                if (bytesSinceCacheFlush >= RandomAccessReader.CACHE_FLUSH_INTERVAL_IN_BYTES)
                 {
                     CLibrary.trySkipCache(this.fd, ioCacheStartOffset, 0);
                     ioCacheStartOffset = bufferOffset;
@@ -341,7 +364,7 @@ public class SequentialWriter extends OutputStream
      */
     protected static class BufferedFileWriterMark implements FileMark
     {
-        long pointer;
+        final long pointer;
 
         public BufferedFileWriterMark(long pointer)
         {

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.db.compaction;
 
 import java.util.Collection;
@@ -28,13 +27,17 @@ import org.apache.cassandra.db.compaction.CompactionManager.CompactionExecutorSt
 
 public abstract class AbstractCompactionTask
 {
-    protected ColumnFamilyStore cfs;
+    protected final ColumnFamilyStore cfs;
     protected Collection<SSTableReader> sstables;
+    protected boolean isUserDefined;
+    protected OperationType compactionType;
 
     public AbstractCompactionTask(ColumnFamilyStore cfs, Collection<SSTableReader> sstables)
     {
         this.cfs = cfs;
         this.sstables = sstables;
+        this.isUserDefined = false;
+        this.compactionType = OperationType.COMPACTION;
     }
 
     public abstract int execute(CompactionExecutorStatsCollector collector) throws IOException;
@@ -59,7 +62,9 @@ public abstract class AbstractCompactionTask
      */
     public boolean markSSTablesForCompaction()
     {
-        return markSSTablesForCompaction(cfs.getMinimumCompactionThreshold(), cfs.getMaximumCompactionThreshold());
+        int min = isUserDefined ? 1 : cfs.getMinimumCompactionThreshold();
+        int max = isUserDefined ? Integer.MAX_VALUE : cfs.getMaximumCompactionThreshold();
+        return markSSTablesForCompaction(min, max);
     }
 
     public boolean markSSTablesForCompaction(int min, int max)
@@ -84,4 +89,16 @@ public abstract class AbstractCompactionTask
     // Can be overriden for action that need to be performed if the task won't
     // execute (if sstable can't be marked successfully)
     protected void cancel() {}
+
+    public AbstractCompactionTask isUserDefined(boolean isUserDefined)
+    {
+        this.isUserDefined = isUserDefined;
+        return this;
+    }
+
+    public AbstractCompactionTask setCompactionType(OperationType compactionType)
+    {
+        this.compactionType = compactionType;
+        return this;
+    }
 }

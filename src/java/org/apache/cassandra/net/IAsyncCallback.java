@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.net;
 
 /**
@@ -24,10 +23,10 @@ package org.apache.cassandra.net;
  * service.  In particular, if any shared state is referenced, making
  * response alone synchronized will not suffice.
  */
-public interface IAsyncCallback extends IMessageCallback
+public interface IAsyncCallback<T> extends IMessageCallback
 {
-	/**
-	 * @param msg response received.
-	 */
-	public void response(Message msg);
+    /**
+     * @param msg response received.
+     */
+    public void response(MessageIn<T> msg);
 }

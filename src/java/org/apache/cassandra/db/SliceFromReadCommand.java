@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -65,7 +65,7 @@ public class SliceFromReadCommand extends ReadCommand
 
     public Row getRow(Table table) throws IOException
     {
-        DecoratedKey<?> dk = StorageService.getPartitioner().decorateKey(key);
+        DecoratedKey dk = StorageService.getPartitioner().decorateKey(key);
         return table.getRow(QueryFilter.getSliceFilter(dk, queryPath, start, finish, reversed, count));
     }
 
@@ -73,13 +73,19 @@ public class SliceFromReadCommand extends ReadCommand
     public ReadCommand maybeGenerateRetryCommand(RepairCallback handler, Row row)
     {
         int maxLiveColumns = handler.getMaxLiveColumns();
-        int liveColumnsInRow = row != null ? row.cf.getLiveColumnCount() : 0;
+        int liveColumnsInRow = row != null ? row.getLiveColumnCount() : 0;
 
         assert maxLiveColumns <= count;
-        if ((maxLiveColumns == count) && (liveColumnsInRow < count))
+        // We generate a retry if at least one node reply with count live columns but after merge we have less
+        // than the total number of column we are interested in (which may be < count on a retry)
+        if ((maxLiveColumns == count) && (liveColumnsInRow < getOriginalRequestedCount()))
         {
-            int retryCount = count + count - liveColumnsInRow;
-            return new RetriedSliceFromReadCommand(table, key, queryPath, start, finish, reversed, count, retryCount);
+            // We asked t (= count) live columns and got l (=liveColumnsInRow) ones.
+            // From that, we can estimate that on this row, for x requested
+            // columns, only l/t end up live after reconciliation. So for next
+            // round we want to ask x column so that x * (l/t) == t, i.e. x = t^2/l.
+            int retryCount = liveColumnsInRow == 0 ? count + 1 : ((count * count) / liveColumnsInRow) + 1;
+            return new RetriedSliceFromReadCommand(table, key, queryPath, start, finish, reversed, getOriginalRequestedCount(), retryCount);
         }
 
         return null;
@@ -93,11 +99,11 @@ public class SliceFromReadCommand extends ReadCommand
 
         int liveColumnsInRow = row.cf.getLiveColumnCount();
 
-        if (liveColumnsInRow > getRequestedCount())
+        if (liveColumnsInRow > getOriginalRequestedCount())
         {
-            int columnsToTrim = liveColumnsInRow - getRequestedCount();
+            int columnsToTrim = liveColumnsInRow - getOriginalRequestedCount();
 
-            logger.debug("trimming {} live columns to the originally requested {}", row.cf.getLiveColumnCount(), getRequestedCount());
+            logger.debug("trimming {} live columns to the originally requested {}", row.cf.getLiveColumnCount(), getOriginalRequestedCount());
 
             Collection<IColumn> columns;
             if (reversed)
@@ -122,7 +128,12 @@ public class SliceFromReadCommand extends ReadCommand
         }
     }
 
-    protected int getRequestedCount()
+    /**
+     * The original number of columns requested by the user.
+     * This can be different from count when the slice command is a retry (see
+     * RetriedSliceFromReadCommand)
+     */
+    protected int getOriginalRequestedCount()
     {
         return count;
     }
@@ -173,15 +184,20 @@ class SliceFromReadCommandSerializer implements IVersionedSerializer<ReadCommand
 
     public long serializedSize(ReadCommand cmd, int version)
     {
+        TypeSizes sizes = TypeSizes.NATIVE;
         SliceFromReadCommand command = (SliceFromReadCommand) cmd;
-        int size = DBConstants.boolSize;
-        size += DBConstants.shortSize + FBUtilities.encodedUTF8Length(command.table);
-        size += DBConstants.shortSize + command.key.remaining();
-        size += command.queryPath.serializedSize();
-        size += DBConstants.shortSize + command.start.remaining();
-        size += DBConstants.shortSize + command.finish.remaining();
-        size += DBConstants.boolSize;
-        size += DBConstants.intSize;
+        int keySize = command.key.remaining();
+        int startSize = command.start.remaining();
+        int finishSize = command.finish.remaining();
+
+        int size = sizes.sizeof(cmd.isDigestQuery()); // boolean
+        size += sizes.sizeof(command.table);
+        size += sizes.sizeof((short) keySize) + keySize;
+        size += command.queryPath.serializedSize(sizes);
+        size += sizes.sizeof((short) startSize) + startSize;
+        size += sizes.sizeof((short) finishSize) + finishSize;
+        size += sizes.sizeof(command.reversed);
+        size += sizes.sizeof(command.count);
         return size;
     }
 }

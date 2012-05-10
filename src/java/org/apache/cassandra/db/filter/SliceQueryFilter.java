@@ -1,6 +1,4 @@
-package org.apache.cassandra.db.filter;
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,18 +6,16 @@ package org.apache.cassandra.db.filter;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-
+package org.apache.cassandra.db.filter;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -41,12 +37,12 @@ import org.apache.cassandra.io.util.FileDataInput;
 
 public class SliceQueryFilter implements IFilter
 {
-    private static Logger logger = LoggerFactory.getLogger(SliceQueryFilter.class);
+    private static final Logger logger = LoggerFactory.getLogger(SliceQueryFilter.class);
 
-    public final ByteBuffer start;
-    public final ByteBuffer finish;
+    public volatile ByteBuffer start;
+    public volatile ByteBuffer finish;
     public final boolean reversed;
-    public final int count;
+    public volatile int count;
 
     public SliceQueryFilter(ByteBuffer start, ByteBuffer finish, boolean reversed, int count)
     {
@@ -56,19 +52,19 @@ public class SliceQueryFilter implements IFilter
         this.count = count;
     }
 
-    public IColumnIterator getMemtableColumnIterator(ColumnFamily cf, DecoratedKey<?> key)
+    public IColumnIterator getMemtableColumnIterator(ColumnFamily cf, DecoratedKey key)
     {
         return Memtable.getSliceIterator(key, cf, this);
     }
 
-    public IColumnIterator getSSTableColumnIterator(SSTableReader sstable, DecoratedKey<?> key)
+    public IColumnIterator getSSTableColumnIterator(SSTableReader sstable, DecoratedKey key)
     {
         return new SSTableSliceIterator(sstable, key, start, finish, reversed);
     }
-    
-    public IColumnIterator getSSTableColumnIterator(SSTableReader sstable, FileDataInput file, DecoratedKey<?> key)
+
+    public IColumnIterator getSSTableColumnIterator(SSTableReader sstable, FileDataInput file, DecoratedKey key, RowIndexEntry indexEntry)
     {
-        return new SSTableSliceIterator(sstable, file, key, start, finish, reversed);
+        return new SSTableSliceIterator(sstable, file, key, start, finish, reversed, indexEntry);
     }
 
     public SuperColumn filterSuperColumn(SuperColumn superColumn, int gcBefore)
@@ -103,7 +99,7 @@ public class SliceQueryFilter implements IFilter
         return scFiltered;
     }
 
-    public Comparator<IColumn> getColumnComparator(AbstractType comparator)
+    public Comparator<IColumn> getColumnComparator(AbstractType<?> comparator)
     {
         return reversed ? comparator.columnReverseComparator : comparator.columnComparator;
     }
@@ -111,7 +107,7 @@ public class SliceQueryFilter implements IFilter
     public void collectReducedColumns(IColumnContainer container, Iterator<IColumn> reducedColumns, int gcBefore)
     {
         int liveColumns = 0;
-        AbstractType comparator = container.getComparator();
+        AbstractType<?> comparator = container.getComparator();
 
         while (reducedColumns.hasNext())
         {
@@ -127,9 +123,9 @@ public class SliceQueryFilter implements IFilter
                 && ((!reversed && comparator.compare(column.name(), finish) > 0))
                     || (reversed && comparator.compare(column.name(), finish) < 0))
                 break;
- 
+
             // only count live columns towards the `count` criteria
-            if (column.isLive() 
+            if (column.isLive()
                 && (!container.isMarkedForDelete()
                     || column.mostRecentLiveChangeAt() > container.getMarkedForDeleteAt()))
             {
@@ -154,5 +150,10 @@ public class SliceQueryFilter implements IFilter
     public boolean isReversed()
     {
         return reversed;
+    }
+
+    public void updateColumnsLimit(int newLimit)
+    {
+        count = newLimit;
     }
 }

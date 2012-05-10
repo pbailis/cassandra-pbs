@@ -1,5 +1,4 @@
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -7,31 +6,22 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.apache.cassandra.cql;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-
-import com.google.common.collect.Sets;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.ColumnDefinition;
@@ -41,152 +31,27 @@ import org.apache.cassandra.db.marshal.AbstractType;
 import org.apache.cassandra.db.marshal.TypeParser;
 import org.apache.cassandra.thrift.InvalidRequestException;
 import org.apache.cassandra.utils.ByteBufferUtil;
-import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.io.compress.CompressionParameters;
 
 /** A <code>CREATE COLUMNFAMILY</code> parsed from a CQL query statement. */
 public class CreateColumnFamilyStatement
 {
-    private static Logger logger = LoggerFactory.getLogger(CreateColumnFamilyStatement.class);
-
-    private static final String KW_COMPARATOR = "comparator";
-    private static final String KW_COMMENT = "comment";
-    private static final String KW_READREPAIRCHANCE = "read_repair_chance";
-    private static final String KW_GCGRACESECONDS = "gc_grace_seconds";
-    private static final String KW_DEFAULTVALIDATION = "default_validation";
-    private static final String KW_MINCOMPACTIONTHRESHOLD = "min_compaction_threshold";
-    private static final String KW_MAXCOMPACTIONTHRESHOLD = "max_compaction_threshold";
-    private static final String KW_REPLICATEONWRITE = "replicate_on_write";
-
-    private static final String KW_COMPACTION_STRATEGY_CLASS = "compaction_strategy_class";
-    
-    // Maps CQL short names to the respective Cassandra comparator/validator class names
-    public  static final Map<String, String> comparators = new HashMap<String, String>();
-    private static final Set<String> keywords = new HashSet<String>();
-    private static final Set<String> obsoleteKeywords = new HashSet<String>();
-
-    private static final String COMPACTION_OPTIONS_PREFIX = "compaction_strategy_options";
-    private static final String COMPRESSION_PARAMETERS_PREFIX = "compression_parameters";
-
-    static
-    {
-        comparators.put("ascii", "AsciiType");
-        comparators.put("bigint", "LongType");
-        comparators.put("blob", "BytesType");
-        comparators.put("boolean", "BooleanType");
-        comparators.put("counter", "CounterColumnType");
-        comparators.put("decimal", "DecimalType");
-        comparators.put("double", "DoubleType");
-        comparators.put("float", "FloatType");
-        comparators.put("int", "Int32Type");
-        comparators.put("text", "UTF8Type");
-        comparators.put("timestamp", "DateType");
-        comparators.put("uuid", "UUIDType");
-        comparators.put("varchar", "UTF8Type");
-        comparators.put("varint", "IntegerType");
-
-        keywords.add(KW_COMPARATOR);
-        keywords.add(KW_COMMENT);
-        keywords.add(KW_READREPAIRCHANCE);
-        keywords.add(KW_GCGRACESECONDS);
-        keywords.add(KW_DEFAULTVALIDATION);
-        keywords.add(KW_MINCOMPACTIONTHRESHOLD);
-        keywords.add(KW_MAXCOMPACTIONTHRESHOLD);
-        keywords.add(KW_REPLICATEONWRITE);
-        keywords.add(KW_COMPACTION_STRATEGY_CLASS);
-
-        obsoleteKeywords.add("row_cache_size");
-        obsoleteKeywords.add("key_cache_size");
-        obsoleteKeywords.add("row_cache_save_period_in_seconds");
-        obsoleteKeywords.add("key_cache_save_period_in_seconds");
-        obsoleteKeywords.add("memtable_throughput_in_mb");
-        obsoleteKeywords.add("memtable_operations_in_millions");
-        obsoleteKeywords.add("memtable_flush_after_mins");
-        obsoleteKeywords.add("row_cache_provider");
-    }
- 
     private final String name;
     private final Map<Term, String> columns = new HashMap<Term, String>();
-    private final Map<String, String> properties = new HashMap<String, String>();
-    private List<String> keyValidator = new ArrayList<String>();
+    private final List<String> keyValidator = new ArrayList<String>();
     private ByteBuffer keyAlias = null;
-    private final Map<String, String> compactionStrategyOptions = new HashMap<String, String>();
-    private final Map<String, String> compressionParameters = new HashMap<String, String>();
+    private final CFPropDefs cfProps = new CFPropDefs();
 
     public CreateColumnFamilyStatement(String name)
     {
         this.name = name;
     }
-    
+
     /** Perform validation of parsed params */
-    private void validate(List<String> variables) throws InvalidRequestException
+    private void validate(List<ByteBuffer> variables) throws InvalidRequestException
     {
-        // we need to remove parent:key = value pairs from the main properties
-        Set<String> propsToRemove = new HashSet<String>();
+        cfProps.validate();
 
-        // check if we have compaction/compression options
-        for (String property : properties.keySet())
-        {
-            if (!property.contains(":"))
-                continue;
-
-            String key = property.split(":")[1];
-            String val = properties.get(property);
-
-            if (property.startsWith(COMPACTION_OPTIONS_PREFIX))
-            {
-                compactionStrategyOptions.put(key, val);
-                propsToRemove.add(property);
-            }
-
-            if (property.startsWith(COMPRESSION_PARAMETERS_PREFIX))
-            {
-                compressionParameters.put(key, val);
-                propsToRemove.add(property);
-            }
-        }
-
-        for (String property : propsToRemove)
-            properties.remove(property);
-
-        // Column family name
-        if (!name.matches("\\w+"))
-            throw new InvalidRequestException(String.format("\"%s\" is not a valid column family name", name));
-        
-        // Catch the case where someone passed a kwarg that is not recognized.
-        for (String bogus : Sets.difference(properties.keySet(), Sets.union(keywords, obsoleteKeywords)))
-            throw new InvalidRequestException(bogus + " is not a valid keyword argument for CREATE COLUMNFAMILY");
-        for (String obsolete : Sets.intersection(properties.keySet(), obsoleteKeywords))
-            logger.warn("Ignoring obsolete property {}", obsolete);
-        
-        // Validate min/max compaction thresholds
-        Integer minCompaction = getPropertyInt(KW_MINCOMPACTIONTHRESHOLD, null);
-        Integer maxCompaction = getPropertyInt(KW_MAXCOMPACTIONTHRESHOLD, null);
-        
-        if ((minCompaction != null) && (maxCompaction != null))     // Both min and max are set
-        {
-            if ((minCompaction > maxCompaction) && (maxCompaction != 0))
-                throw new InvalidRequestException(String.format("%s cannot be larger than %s",
-                                                                KW_MINCOMPACTIONTHRESHOLD,
-                                                                KW_MAXCOMPACTIONTHRESHOLD));
-        }
-        else if (minCompaction != null)     // Only the min threshold is set
-        {
-            if (minCompaction > CFMetaData.DEFAULT_MAX_COMPACTION_THRESHOLD)
-                throw new InvalidRequestException(String.format("%s cannot be larger than %s, (default %s)",
-                                                                KW_MINCOMPACTIONTHRESHOLD,
-                                                                KW_MAXCOMPACTIONTHRESHOLD,
-                                                                CFMetaData.DEFAULT_MAX_COMPACTION_THRESHOLD));
-        }
-        else if (maxCompaction != null)     // Only the max threshold is set
-        {
-            if ((maxCompaction < CFMetaData.DEFAULT_MIN_COMPACTION_THRESHOLD) && (maxCompaction != 0))
-                throw new InvalidRequestException(String.format("%s cannot be smaller than %s, (default %s)",
-                                                                KW_MAXCOMPACTIONTHRESHOLD,
-                                                                KW_MINCOMPACTIONTHRESHOLD,
-                                                                CFMetaData.DEFAULT_MIN_COMPACTION_THRESHOLD));
-        }
-        
         // Ensure that exactly one key has been specified.
         if (keyValidator.size() < 1)
             throw new InvalidRequestException("You must specify a PRIMARY KEY");
@@ -197,7 +62,7 @@ public class CreateColumnFamilyStatement
 
         try
         {
-            comparator = getComparator();
+            comparator = cfProps.getComparator();
         }
         catch (ConfigurationException e)
         {
@@ -215,18 +80,18 @@ public class CreateColumnFamilyStatement
 
         }
     }
-    
+
     /** Map a column name to a validator for its value */
     public void addColumn(Term term, String comparator)
     {
         columns.put(term, comparator);
     }
-    
+
     public void setKeyType(String validator)
     {
         keyValidator.add(validator);
     }
-    
+
     public String getKeyType()
     {
         return keyValidator.get(0);
@@ -242,28 +107,30 @@ public class CreateColumnFamilyStatement
     /** Map a keyword to the corresponding value */
     public void addProperty(String name, String value)
     {
-        properties.put(name, value);
+        cfProps.addProperty(name, value);
     }
-    
+
     /** Name of the column family to create */
     public String getName()
     {
         return name;
     }
-    
+
     // Column definitions
     private Map<ByteBuffer, ColumnDefinition> getColumns(AbstractType<?> comparator) throws InvalidRequestException
     {
         Map<ByteBuffer, ColumnDefinition> columnDefs = new HashMap<ByteBuffer, ColumnDefinition>();
-        
+
         for (Map.Entry<Term, String> col : columns.entrySet())
         {
             try
             {
                 ByteBuffer columnName = comparator.fromString(col.getKey().getText());
-                String validatorClassName = comparators.containsKey(col.getValue()) ? comparators.get(col.getValue()) : col.getValue();
+                String validatorClassName = CFPropDefs.comparators.containsKey(col.getValue())
+                                          ? CFPropDefs.comparators.get(col.getValue())
+                                          : col.getValue();
                 AbstractType<?> validator = TypeParser.parse(validatorClassName);
-                columnDefs.put(columnName, new ColumnDefinition(columnName, validator, null, null, null));
+                columnDefs.put(columnName, new ColumnDefinition(columnName, validator, null, null, null, null));
             }
             catch (ConfigurationException e)
             {
@@ -272,45 +139,26 @@ public class CreateColumnFamilyStatement
                 throw ex;
             }
         }
-        
+
         return columnDefs;
-    }
-
-    /* If not comparator/validator is not specified, default to text (BytesType is the wrong default for CQL
-     * since it uses hex terms).  If the value specified is not found in the comparators map, assume the user
-     * knows what they are doing (a custom comparator/validator for example), and pass it on as-is.
-     */
-
-    private AbstractType<?> getComparator() throws ConfigurationException
-    {
-        return TypeParser.parse((comparators.get(getPropertyString(KW_COMPARATOR, "text")) != null)
-                                  ? comparators.get(getPropertyString(KW_COMPARATOR, "text"))
-                                  : getPropertyString(KW_COMPARATOR, "text"));
-    }
-
-    private AbstractType<?> getValidator() throws ConfigurationException
-    {
-        return TypeParser.parse((comparators.get(getPropertyString(KW_DEFAULTVALIDATION, "text")) != null)
-                                  ? comparators.get(getPropertyString(KW_DEFAULTVALIDATION, "text"))
-                                  : getPropertyString(KW_DEFAULTVALIDATION, "text"));
     }
 
     /**
      * Returns a CFMetaData instance based on the parameters parsed from this
      * <code>CREATE</code> statement, or defaults where applicable.
-     * 
+     *
      * @param keyspace keyspace to apply this column family to
      * @return a CFMetaData instance corresponding to the values parsed from this statement
      * @throws InvalidRequestException on failure to validate parsed parameters
      */
-    public CFMetaData getCFMetaData(String keyspace, List<String> variables) throws InvalidRequestException
+    public CFMetaData getCFMetaData(String keyspace, List<ByteBuffer> variables) throws InvalidRequestException
     {
         validate(variables);
 
         CFMetaData newCFMD;
         try
         {
-            AbstractType<?> comparator = getComparator();
+            AbstractType<?> comparator = cfProps.getComparator();
 
             newCFMD = new CFMetaData(keyspace,
                                      name,
@@ -318,20 +166,22 @@ public class CreateColumnFamilyStatement
                                      comparator,
                                      null);
 
-            newCFMD.comment(properties.get(KW_COMMENT))
-                   .readRepairChance(getPropertyDouble(KW_READREPAIRCHANCE, CFMetaData.DEFAULT_READ_REPAIR_CHANCE))
-                   .replicateOnWrite(getPropertyBoolean(KW_REPLICATEONWRITE, CFMetaData.DEFAULT_REPLICATE_ON_WRITE))
-                   .gcGraceSeconds(getPropertyInt(KW_GCGRACESECONDS, CFMetaData.DEFAULT_GC_GRACE_SECONDS))
-                   .defaultValidator(getValidator())
-                   .minCompactionThreshold(getPropertyInt(KW_MINCOMPACTIONTHRESHOLD, CFMetaData.DEFAULT_MIN_COMPACTION_THRESHOLD))
-                   .maxCompactionThreshold(getPropertyInt(KW_MAXCOMPACTIONTHRESHOLD, CFMetaData.DEFAULT_MAX_COMPACTION_THRESHOLD))
-                   .mergeShardsChance(0.0)
+            newCFMD.comment(cfProps.getProperty(CFPropDefs.KW_COMMENT))
+                   .readRepairChance(getPropertyDouble(CFPropDefs.KW_READREPAIRCHANCE, CFMetaData.DEFAULT_READ_REPAIR_CHANCE))
+                   .dcLocalReadRepairChance(getPropertyDouble(CFPropDefs.KW_DCLOCALREADREPAIRCHANCE, CFMetaData.DEFAULT_DCLOCAL_READ_REPAIR_CHANCE))
+                   .replicateOnWrite(getPropertyBoolean(CFPropDefs.KW_REPLICATEONWRITE, CFMetaData.DEFAULT_REPLICATE_ON_WRITE))
+                   .gcGraceSeconds(getPropertyInt(CFPropDefs.KW_GCGRACESECONDS, CFMetaData.DEFAULT_GC_GRACE_SECONDS))
+                   .defaultValidator(cfProps.getValidator())
+                   .minCompactionThreshold(getPropertyInt(CFPropDefs.KW_MINCOMPACTIONTHRESHOLD, CFMetaData.DEFAULT_MIN_COMPACTION_THRESHOLD))
+                   .maxCompactionThreshold(getPropertyInt(CFPropDefs.KW_MAXCOMPACTIONTHRESHOLD, CFMetaData.DEFAULT_MAX_COMPACTION_THRESHOLD))
                    .columnMetadata(getColumns(comparator))
-                   .keyValidator(TypeParser.parse(comparators.get(getKeyType())))
+                   .keyValidator(TypeParser.parse(CFPropDefs.comparators.get(getKeyType())))
                    .keyAlias(keyAlias)
-                   .compactionStrategyOptions(compactionStrategyOptions)
-                   .compressionParameters(CompressionParameters.create(compressionParameters))
-                   .validate();
+                   .compactionStrategyClass(cfProps.compactionStrategyClass)
+                   .compactionStrategyOptions(cfProps.compactionStrategyOptions)
+                   .compressionParameters(CompressionParameters.create(cfProps.compressionParameters))
+                   .caching(CFMetaData.Caching.fromString(getPropertyString(CFPropDefs.KW_CACHING, CFMetaData.DEFAULT_CACHING_STRATEGY.toString())))
+                   .bloomFilterFpChance(getPropertyDouble(CFPropDefs.KW_BF_FP_CHANCE, CFMetaData.DEFAULT_BF_FP_CHANCE));
         }
         catch (ConfigurationException e)
         {
@@ -339,67 +189,31 @@ public class CreateColumnFamilyStatement
         }
         return newCFMD;
     }
-    
+
     private String getPropertyString(String key, String defaultValue)
     {
-        String value = properties.get(key);
-        return value != null ? value : defaultValue;
+        return cfProps.getPropertyString(key, defaultValue);
     }
-    
-    // Return a property value, typed as a Boolean
+
     private Boolean getPropertyBoolean(String key, Boolean defaultValue) throws InvalidRequestException
     {
-        String value = properties.get(key);
-        return (value == null) ? defaultValue : value.toLowerCase().matches("(1|true|yes)");
+        return cfProps.getPropertyBoolean(key, defaultValue);
     }
-    
-    // Return a property value, typed as a Double
+
     private Double getPropertyDouble(String key, Double defaultValue) throws InvalidRequestException
     {
-        Double result;
-        String value = properties.get(key);
-        
-        if (value == null)
-            result = defaultValue;
-        else
-        {
-            try
-            {
-                result = Double.parseDouble(value);
-            }
-            catch (NumberFormatException e)
-            {
-                throw new InvalidRequestException(String.format("%s not valid for \"%s\"", value, key));
-            }
-        }
-        return result;
+        return cfProps.getPropertyDouble(key, defaultValue);
     }
-    
-    // Return a property value, typed as an Integer
+
     private Integer getPropertyInt(String key, Integer defaultValue) throws InvalidRequestException
     {
-        Integer result;
-        String value = properties.get(key);
-        
-        if (value == null)
-            result = defaultValue;
-        else
-        {
-            try
-            {
-                result = Integer.parseInt(value);
-            }
-            catch (NumberFormatException e)
-            {
-                throw new InvalidRequestException(String.format("%s not valid for \"%s\"", value, key));
-            }
-        }
-        return result;
+        return cfProps.getPropertyInt(key, defaultValue);
     }
 
     public Map<Term, String> getColumns()
     {
         return columns;
     }
-    
+
 }
+

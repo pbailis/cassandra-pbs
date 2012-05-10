@@ -18,30 +18,17 @@
 
 package org.apache.cassandra.utils;
 
-import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.fail;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
-
 import com.google.common.base.Charsets;
+import com.google.common.primitives.Ints;
 import org.junit.Test;
 
-public class FBUtilitiesTest 
+public class FBUtilitiesTest
 {
-    @Test
-    public void testCopyIntoBytes()
-    {
-        int i = 300;
-        long l = 1000;
-        ByteBuffer b = ByteBuffer.allocate(20);
-        FBUtilities.copyIntoBytes(b.array(), 0, i);
-        FBUtilities.copyIntoBytes(b.array(), 4, l);
-        assertEquals(i, b.getInt(0));
-        assertEquals(l, b.getLong(4));
-    }
-    
     @Test
     public void testCompareByteSubArrays()
     {
@@ -56,7 +43,7 @@ public class FBUtilitiesTest
                 ByteBufferUtil.bytes(524255231), 0, null, 0, 4) == 1;
 
         // handle comparisons
-        FBUtilities.copyIntoBytes(bytes.array(), 3, 524255231);
+        System.arraycopy(Ints.toByteArray(524255231), 0, bytes.array(), 3, 4);
         assert ByteBufferUtil.compareSubArrays(
                 bytes, 3, ByteBufferUtil.bytes(524255231), 0, 4) == 0;
         assert ByteBufferUtil.compareSubArrays(
@@ -88,5 +75,5 @@ public class FBUtilitiesTest
     {
         ByteBuffer bytes = ByteBuffer.wrap(new byte[]{(byte)0xff, (byte)0xfe});
         ByteBufferUtil.string(bytes, Charsets.UTF_8);
-    } 
+    }
 }

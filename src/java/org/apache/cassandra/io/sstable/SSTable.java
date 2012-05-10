@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -6,21 +6,18 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-
 package org.apache.cassandra.io.sstable;
 
 import java.io.File;
-import java.io.FileFilter;
 import java.io.IOException;
 import java.util.*;
 
@@ -32,6 +29,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.config.CFMetaData;
+import org.apache.cassandra.db.RowIndexEntry;
 import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.io.util.RandomAccessReader;
@@ -61,8 +59,11 @@ public abstract class SSTable
     public static final String COMPONENT_FILTER = Component.Type.FILTER.repr;
     public static final String COMPONENT_STATS = Component.Type.STATS.repr;
     public static final String COMPONENT_DIGEST = Component.Type.DIGEST.repr;
+    public static final String COMPONENT_SUMMARY = Component.Type.SUMMARY.repr;
 
     public static final String TEMPFILE_MARKER = "tmp";
+
+    public static final int TOMBSTONE_HISTOGRAM_BIN_SIZE = 100;
 
     public static final Comparator<SSTableReader> maxTimestampComparator = new Comparator<SSTableReader>()
     {
@@ -135,13 +136,14 @@ public abstract class SSTable
             FileUtils.deleteWithConfirm(desc.filenameFor(Component.DATA));
         for (Component component : components)
         {
-            if (component.equals(Component.DATA) || component.equals(Component.COMPACTED_MARKER))
+            if (component.equals(Component.DATA) || component.equals(Component.COMPACTED_MARKER) || component.equals(Component.SUMMARY))
                 continue;
 
             FileUtils.deleteWithConfirm(desc.filenameFor(component));
         }
         // remove the COMPACTED_MARKER component last if it exists
         FileUtils.delete(desc.filenameFor(Component.COMPACTED_MARKER));
+        FileUtils.delete(desc.filenameFor(Component.SUMMARY));
 
         logger.debug("Deleted {}", desc);
         return true;
@@ -151,7 +153,7 @@ public abstract class SSTable
      * If the given @param key occupies only part of a larger buffer, allocate a new buffer that is only
      * as large as necessary.
      */
-    public static DecoratedKey<?> getMinimalKey(DecoratedKey<?> key)
+    public static DecoratedKey getMinimalKey(DecoratedKey key)
     {
         return key.key.position() > 0 || key.key.hasRemaining()
                                        ? new DecoratedKey(key.token, HeapAllocator.instance.clone(key.key))
@@ -161,6 +163,11 @@ public abstract class SSTable
     public String getFilename()
     {
         return descriptor.filenameFor(COMPONENT_DATA);
+    }
+
+    public String getIndexFilename()
+    {
+        return descriptor.filenameFor(COMPONENT_INDEX);
     }
 
     public String getColumnFamilyName()
@@ -208,7 +215,7 @@ public abstract class SSTable
     }
 
     /** @return An estimate of the number of keys contained in the given index file. */
-    static long estimateRowsFromIndex(RandomAccessReader ifile) throws IOException
+    long estimateRowsFromIndex(RandomAccessReader ifile) throws IOException
     {
         // collect sizes for the first 10000 keys, or first 10 megabytes of data
         final int SAMPLES_CAP = 10000, BYTES_CAP = (int)Math.min(10000000, ifile.length());
@@ -216,7 +223,7 @@ public abstract class SSTable
         while (ifile.getFilePointer() < BYTES_CAP && keys < SAMPLES_CAP)
         {
             ByteBufferUtil.skipShortLength(ifile);
-            FileUtils.skipBytesFully(ifile, 8);
+            RowIndexEntry.serializer.skip(ifile, descriptor);
             keys++;
         }
         assert keys > 0 && ifile.getFilePointer() > 0 && ifile.length() > 0 : "Unexpected empty index file: " + ifile;

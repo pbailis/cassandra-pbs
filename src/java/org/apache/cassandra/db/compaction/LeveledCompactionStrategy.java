@@ -1,6 +1,4 @@
-package org.apache.cassandra.db.compaction;
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,30 +6,34 @@ package org.apache.cassandra.db.compaction;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+package org.apache.cassandra.db.compaction;
 
-
+import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
 
-import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Sets;
+import com.google.common.base.Joiner;
+import com.google.common.collect.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.db.ColumnFamilyStore;
+import org.apache.cassandra.db.DecoratedKey;
+import org.apache.cassandra.db.columniterator.IColumnIterator;
+import org.apache.cassandra.dht.Range;
+import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.io.sstable.SSTable;
 import org.apache.cassandra.io.sstable.SSTableReader;
+import org.apache.cassandra.io.sstable.SSTableScanner;
 import org.apache.cassandra.notifications.INotification;
 import org.apache.cassandra.notifications.INotificationConsumer;
 import org.apache.cassandra.notifications.SSTableAddedNotification;
@@ -136,7 +138,18 @@ public class LeveledCompactionStrategy extends AbstractCompactionStrategy implem
         else if (notification instanceof SSTableListChangedNotification)
         {
             SSTableListChangedNotification listChangedNotification = (SSTableListChangedNotification) notification;
-            manifest.promote(listChangedNotification.removed, listChangedNotification.added);
+            switch (listChangedNotification.compactionType)
+            {
+                // Cleanup, scrub and updateSSTable shouldn't promote (see #3989)
+                case CLEANUP:
+                case SCRUB:
+                case UPGRADE_SSTABLES:
+                    manifest.replace(listChangedNotification.removed, listChangedNotification.added);
+                    break;
+                default:
+                    manifest.promote(listChangedNotification.removed, listChangedNotification.added);
+                    break;
+            }
         }
     }
 
@@ -149,6 +162,113 @@ public class LeveledCompactionStrategy extends AbstractCompactionStrategy implem
     {
         Set<SSTableReader> L0 = ImmutableSet.copyOf(manifest.getLevel(0));
         return Sets.difference(L0, sstablesToIgnore).size() + manifest.getLevelCount() > 20;
+    }
+
+    public List<ICompactionScanner> getScanners(Collection<SSTableReader> sstables, Range<Token> range) throws IOException
+    {
+        Multimap<Integer, SSTableReader> byLevel = ArrayListMultimap.create();
+        for (SSTableReader sstable : sstables)
+        {
+            int level = manifest.levelOf(sstable);
+            assert level >= 0;
+            byLevel.get(level).add(sstable);
+        }
+
+        List<ICompactionScanner> scanners = new ArrayList<ICompactionScanner>(sstables.size());
+        for (Integer level : byLevel.keySet())
+        {
+            if (level == 0)
+            {
+                // L0 makes no guarantees about overlapping-ness.  Just create a direct scanner for each
+                for (SSTableReader sstable : byLevel.get(level))
+                    scanners.add(sstable.getDirectScanner(range));
+            }
+            else
+            {
+                // Create a LeveledScanner that only opens one sstable at a time, in sorted order
+                scanners.add(new LeveledScanner(byLevel.get(level), range));
+            }
+        }
+
+        return scanners;
+    }
+
+    // Lazily creates SSTableBoundedScanner for sstable that are assumed to be from the
+    // same level (e.g. non overlapping) - see #4142
+    private static class LeveledScanner extends AbstractIterator<IColumnIterator> implements ICompactionScanner
+    {
+        private final Range<Token> range;
+        private final List<SSTableReader> sstables;
+        private final Iterator<SSTableReader> sstableIterator;
+        private final long totalLength;
+
+        private SSTableScanner currentScanner;
+        private long positionOffset;
+
+        public LeveledScanner(Collection<SSTableReader> sstables, Range<Token> range)
+        {
+            this.range = range;
+            this.sstables = new ArrayList<SSTableReader>(sstables);
+            Collections.sort(this.sstables, SSTable.sstableComparator);
+            this.sstableIterator = this.sstables.iterator();
+
+            long length = 0;
+            for (SSTableReader sstable : sstables)
+                length += sstable.uncompressedLength();
+            totalLength = length;
+        }
+
+        protected IColumnIterator computeNext()
+        {
+            try
+            {
+                if (currentScanner != null)
+                {
+                    if (currentScanner.hasNext())
+                    {
+                        return currentScanner.next();
+                    }
+                    else
+                    {
+                        positionOffset += currentScanner.getLengthInBytes();
+                        currentScanner.close();
+                        currentScanner = null;
+                        return computeNext();
+                    }
+                }
+
+                if (!sstableIterator.hasNext())
+                    return endOfData();
+
+                currentScanner = sstableIterator.next().getDirectScanner(range);
+                return computeNext();
+            }
+            catch (IOException e)
+            {
+                throw new RuntimeException(e);
+            }
+        }
+
+        public void close() throws IOException
+        {
+            if (currentScanner != null)
+                currentScanner.close();
+        }
+
+        public long getLengthInBytes()
+        {
+            return totalLength;
+        }
+
+        public long getCurrentPosition()
+        {
+            return positionOffset + (currentScanner == null ? 0L : currentScanner.getCurrentPosition());
+        }
+
+        public String getBackingFiles()
+        {
+            return Joiner.on(", ").join(sstables);
+        }
     }
 
     @Override

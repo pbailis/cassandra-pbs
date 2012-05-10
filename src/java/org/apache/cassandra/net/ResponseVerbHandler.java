@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.net;
 
 import org.apache.cassandra.service.PBSPredictor;
@@ -28,26 +27,23 @@ import org.apache.cassandra.service.ReadCallback;
 
 public class ResponseVerbHandler implements IVerbHandler
 {
-    private static final Logger logger_ = LoggerFactory.getLogger( ResponseVerbHandler.class );
+    private static final Logger logger = LoggerFactory.getLogger( ResponseVerbHandler.class );
 
-    public void doVerb(Message message, String id)
-    {     
+    public void doVerb(MessageIn message, String id)
+    {
         double age = System.currentTimeMillis() - MessagingService.instance().getRegisteredCallbackAge(id);
         CallbackInfo callbackInfo = MessagingService.instance().removeRegisteredCallback(id);
         if (callbackInfo == null)
         {
-            logger_.debug("Callback already removed for {}", id);
+            logger.debug("Callback already removed for {}", id);
             return;
         }
 
         IMessageCallback cb = callbackInfo.callback;
-        MessagingService.instance().maybeAddLatency(cb, message.getFrom(), age);
+        MessagingService.instance().maybeAddLatency(cb, message.from, age);
 
         if (cb instanceof IAsyncCallback)
         {
-            if (logger_.isDebugEnabled())
-                logger_.debug("Processing response on a callback from " + id + "@" + message.getFrom());
-
             if(cb instanceof IWriteResponseHandler)
             {
                 PBSPredictor.logWriteResponse(id, message);
@@ -57,12 +53,15 @@ public class ResponseVerbHandler implements IVerbHandler
                 PBSPredictor.logReadResponse(id, message);
             }
 
+            if (logger.isDebugEnabled())
+                logger.debug("Processing response on a callback from " + id + "@" + message.from);
+
             ((IAsyncCallback) cb).response(message);
         }
         else
         {
-            if (logger_.isDebugEnabled())
-                logger_.debug("Processing response on an async result from " + id + "@" + message.getFrom());
+            if (logger.isDebugEnabled())
+                logger.debug("Processing response on an async result from " + id + "@" + message.from);
             ((IAsyncResult) cb).result(message);
         }
     }

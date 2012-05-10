@@ -27,7 +27,7 @@ import static org.apache.cassandra.Util.addMutation;
 import java.net.InetAddress;
 import java.util.*;
 
-import org.apache.cassandra.CleanupHelper;
+import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.columniterator.IdentityQueryFilter;
 import org.apache.cassandra.db.context.CounterContext;
@@ -40,7 +40,6 @@ import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.io.sstable.SSTableUtils;
 import org.apache.cassandra.io.sstable.SSTableReader;
 import org.apache.cassandra.service.StorageService;
-import org.apache.cassandra.thrift.IndexClause;
 import org.apache.cassandra.thrift.IndexExpression;
 import org.apache.cassandra.thrift.IndexOperator;
 import org.apache.cassandra.utils.FBUtilities;
@@ -53,7 +52,7 @@ import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.utils.ByteBufferUtil;
 
-public class StreamingTransferTest extends CleanupHelper
+public class StreamingTransferTest extends SchemaLoader
 {
     private static final Logger logger = LoggerFactory.getLogger(StreamingTransferTest.class);
 
@@ -105,7 +104,7 @@ public class StreamingTransferTest extends CleanupHelper
 
         // and that the max timestamp for the file was rediscovered
         assertEquals(timestamp, cfs.getSSTables().iterator().next().getMaxTimestamp());
-        
+
         List<String> keys = new ArrayList<String>();
         for (int off : offs)
             keys.add("key" + off);
@@ -130,7 +129,7 @@ public class StreamingTransferTest extends CleanupHelper
     {
         final Table table = Table.open("Keyspace1");
         final ColumnFamilyStore cfs = table.getColumnFamilyStore("Indexed1");
-        
+
         List<String> keys = createAndTransfer(table, cfs, new Mutator()
         {
             public void mutate(String key, String col, long timestamp) throws Exception
@@ -154,10 +153,10 @@ public class StreamingTransferTest extends CleanupHelper
             IndexExpression expr = new IndexExpression(ByteBufferUtil.bytes("birthdate"),
                                                        IndexOperator.EQ,
                                                        ByteBufferUtil.bytes(val));
-            IndexClause clause = new IndexClause(Arrays.asList(expr), ByteBufferUtil.EMPTY_BYTE_BUFFER, 100);
+            List<IndexExpression> clause = Arrays.asList(expr);
             IFilter filter = new IdentityQueryFilter();
             Range<RowPosition> range = Util.range("", "");
-            List<Row> rows = cfs.search(clause, range, filter);
+            List<Row> rows = cfs.search(clause, range, 100, filter);
             assertEquals(1, rows.size());
             assert rows.get(0).key.key.equals(ByteBufferUtil.bytes(key));
         }
@@ -168,7 +167,7 @@ public class StreamingTransferTest extends CleanupHelper
     {
         final Table table = Table.open("Keyspace1");
         final ColumnFamilyStore cfs = table.getColumnFamilyStore("Super1");
-        
+
         createAndTransfer(table, cfs, new Mutator()
         {
             public void mutate(String key, String col, long timestamp) throws Exception
@@ -186,7 +185,7 @@ public class StreamingTransferTest extends CleanupHelper
         final Table table = Table.open("Keyspace1");
         final ColumnFamilyStore cfs = table.getColumnFamilyStore("Counter1");
         final CounterContext cc = new CounterContext();
-        
+
         final Map<String, ColumnFamily> cleanedEntries = new HashMap<String, ColumnFamily>();
 
         List<String> keys = createAndTransfer(table, cfs, new Mutator()

@@ -1,6 +1,4 @@
-package org.apache.cassandra.concurrent;
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,18 +6,16 @@ package org.apache.cassandra.concurrent;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-
+package org.apache.cassandra.concurrent;
 
 import java.util.concurrent.*;
 
@@ -45,7 +41,7 @@ import org.slf4j.LoggerFactory;
  */
 public class DebuggableThreadPoolExecutor extends ThreadPoolExecutor
 {
-    protected static Logger logger = LoggerFactory.getLogger(DebuggableThreadPoolExecutor.class);
+    protected static final Logger logger = LoggerFactory.getLogger(DebuggableThreadPoolExecutor.class);
     public static final RejectedExecutionHandler blockingExecutionHandler = new RejectedExecutionHandler()
     {
         public void rejectedExecution(Runnable task, ThreadPoolExecutor executor)
@@ -98,9 +94,32 @@ public class DebuggableThreadPoolExecutor extends ThreadPoolExecutor
         this.setRejectedExecutionHandler(blockingExecutionHandler);
     }
 
-    public static DebuggableThreadPoolExecutor createWithPoolSize(String threadPoolName, int size)
+    /**
+     * Returns a ThreadPoolExecutor with a fixed number of threads.
+     * When all threads are actively executing tasks, new tasks are queued.
+     * If (most) threads are expected to be idle most of the time, prefer createWithMaxSize() instead.
+     * @param threadPoolName the name of the threads created by this executor
+     * @param size the fixed number of threads for this executor
+     * @return the new DebuggableThreadPoolExecutor
+     */
+    public static DebuggableThreadPoolExecutor createWithFixedPoolSize(String threadPoolName, int size)
     {
-        return new DebuggableThreadPoolExecutor(size, Integer.MAX_VALUE, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>(), new NamedThreadFactory(threadPoolName));
+        return createWithMaximumPoolSize(threadPoolName, size, Integer.MAX_VALUE, TimeUnit.SECONDS);
+    }
+
+    /**
+     * Returns a ThreadPoolExecutor with a fixed maximum number of threads, but whose
+     * threads are terminated when idle for too long.
+     * When all threads are actively executing tasks, new tasks are queued.
+     * @param threadPoolName the name of the threads created by this executor
+     * @param size the maximum number of threads for this executor
+     * @param keepAliveTime the time an idle thread is kept alive before being terminated
+     * @param unit tht time unit for {@code keepAliveTime}
+     * @return the new DebuggableThreadPoolExecutor
+     */
+    public static DebuggableThreadPoolExecutor createWithMaximumPoolSize(String threadPoolName, int size, int keepAliveTime, TimeUnit unit)
+    {
+        return new DebuggableThreadPoolExecutor(size, Integer.MAX_VALUE, keepAliveTime, unit, new LinkedBlockingQueue<Runnable>(), new NamedThreadFactory(threadPoolName));
     }
 
     protected void onInitialRejection(Runnable task) {}
@@ -108,21 +127,32 @@ public class DebuggableThreadPoolExecutor extends ThreadPoolExecutor
     protected void onFinalRejection(Runnable task) {}
 
     @Override
-    public void afterExecute(Runnable r, Throwable t)
+    protected void afterExecute(Runnable r, Throwable t)
     {
         super.afterExecute(r,t);
         logExceptionsAfterExecute(r, t);
     }
 
+    /**
+     * Send @param t and any exception wrapped by @param r to the default uncaught exception handler,
+     * or log them if none such is set up
+     */
     public static void logExceptionsAfterExecute(Runnable r, Throwable t)
     {
-        if (t == null)
-            t = extractThrowable(r);
+        Throwable hiddenThrowable = extractThrowable(r);
+        if (hiddenThrowable != null)
+            handleOrLog(hiddenThrowable);
 
-        if (t != null)
+        // ThreadPoolExecutor will re-throw exceptions thrown by its Task (which will be seen by
+        // the default uncaught exception handler) so we only need to do anything if that handler
+        // isn't set up yet.
+        if (t != null && Thread.getDefaultUncaughtExceptionHandler() == null)
             handleOrLog(t);
     }
 
+    /**
+     * Send @param t to the default uncaught exception handler, or log it if none such is set up
+     */
     public static void handleOrLog(Throwable t)
     {
         if (Thread.getDefaultUncaughtExceptionHandler() == null)
@@ -131,18 +161,21 @@ public class DebuggableThreadPoolExecutor extends ThreadPoolExecutor
             Thread.getDefaultUncaughtExceptionHandler().uncaughtException(Thread.currentThread(), t);
     }
 
-    public static Throwable extractThrowable(Runnable r)
+    /**
+     * @return any exception wrapped by @param runnable, i.e., if it is a FutureTask
+     */
+    public static Throwable extractThrowable(Runnable runnable)
     {
         // Check for exceptions wrapped by FutureTask.  We do this by calling get(), which will
         // cause it to throw any saved exception.
         //
         // Complicating things, calling get() on a ScheduledFutureTask will block until the task
         // is cancelled.  Hence, the extra isDone check beforehand.
-        if ((r instanceof Future<?>) && ((Future<?>) r).isDone())
+        if ((runnable instanceof Future<?>) && ((Future<?>) runnable).isDone())
         {
             try
             {
-                ((Future<?>) r).get();
+                ((Future<?>) runnable).get();
             }
             catch (InterruptedException e)
             {
@@ -160,5 +193,4 @@ public class DebuggableThreadPoolExecutor extends ThreadPoolExecutor
 
         return null;
     }
-
 }

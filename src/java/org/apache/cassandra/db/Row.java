@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.db;
 
 import java.io.*;
@@ -27,22 +26,22 @@ import org.apache.cassandra.utils.ByteBufferUtil;
 
 public class Row
 {
-    private static RowSerializer serializer = new RowSerializer();
+    public static final RowSerializer serializer = new RowSerializer();
 
-    public static RowSerializer serializer()
-    {
-        return serializer;
-    }
-
-    public final DecoratedKey<?> key;
+    public final DecoratedKey key;
     public final ColumnFamily cf;
 
-    public Row(DecoratedKey<?> key, ColumnFamily cf)
+    public Row(DecoratedKey key, ColumnFamily cf)
     {
         assert key != null;
         // cf may be null, indicating no data
         this.key = key;
         this.cf = cf;
+    }
+
+    public int getLiveColumnCount()
+    {
+        return cf == null ? 0 : cf.getLiveColumnCount();
     }
 
     @Override
@@ -59,13 +58,13 @@ public class Row
         public void serialize(Row row, DataOutput dos, int version) throws IOException
         {
             ByteBufferUtil.writeWithShortLength(row.key.key, dos);
-            ColumnFamily.serializer().serialize(row.cf, dos);
+            ColumnFamily.serializer.serialize(row.cf, dos);
         }
 
         public Row deserialize(DataInput dis, int version, IColumnSerializer.Flag flag, ISortedColumns.Factory factory) throws IOException
         {
             return new Row(StorageService.getPartitioner().decorateKey(ByteBufferUtil.readWithShortLength(dis)),
-                           ColumnFamily.serializer().deserialize(dis, flag, factory));
+                           ColumnFamily.serializer.deserialize(dis, flag, factory));
         }
 
         public Row deserialize(DataInput dis, int version) throws IOException
@@ -75,7 +74,8 @@ public class Row
 
         public long serializedSize(Row row, int version)
         {
-            return DBConstants.shortSize + row.key.key.remaining() + ColumnFamily.serializer().serializedSize(row.cf);
+            int keySize = row.key.key.remaining();
+            return TypeSizes.NATIVE.sizeof((short) keySize) + keySize + ColumnFamily.serializer.serializedSize(row.cf, TypeSizes.NATIVE);
         }
     }
 }

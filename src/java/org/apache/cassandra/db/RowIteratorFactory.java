@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,10 +17,8 @@
  */
 package org.apache.cassandra.db;
 
-import java.io.Closeable;
 import java.util.*;
 
-import com.google.common.base.Predicate;
 import com.google.common.collect.AbstractIterator;
 
 import org.apache.cassandra.db.columniterator.IColumnIterator;
@@ -41,7 +39,7 @@ public class RowIteratorFactory
         }
     };
 
-    
+
     /**
      * Get a row iterator over the provided memtables and sstables, between the provided keys
      * and filtered by the queryfilter.
@@ -73,7 +71,6 @@ public class RowIteratorFactory
         {
             final SSTableScanner scanner = sstable.getScanner(filter);
             scanner.seekTo(startWith);
-            assert scanner instanceof Closeable; // otherwise we leak FDs
             iterators.add(scanner);
         }
 
@@ -104,8 +101,10 @@ public class RowIteratorFactory
                 // First check if this row is in the rowCache. If it is we can skip the rest
                 ColumnFamily cached = cfs.getRawCachedRow(key);
                 if (cached == null)
+                {
                     // not cached: collate
                     filter.collateColumns(returnCF, colIters, gcBefore);
+                }
                 else
                 {
                     QueryFilter keyFilter = new QueryFilter(key, filter.path, filter.filter);

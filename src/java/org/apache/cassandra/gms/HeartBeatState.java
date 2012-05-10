@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,27 +15,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.gms;
 
 import java.io.*;
 
+import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.io.IVersionedSerializer;
 
-
 /**
- * HeartBeat State associated with any given endpoint. 
+ * HeartBeat State associated with any given endpoint.
  */
-
 class HeartBeatState
 {
-    private static IVersionedSerializer<HeartBeatState> serializer;
-    
-    static
-    {
-        serializer = new HeartBeatStateSerializer();
-    }
-    
+    public static final IVersionedSerializer<HeartBeatState> serializer = new HeartBeatStateSerializer();
+
     private int generation;
     private int version;
 
@@ -43,18 +36,13 @@ class HeartBeatState
     {
         this(gen, 0);
     }
-    
+
     HeartBeatState(int gen, int ver)
     {
         generation = gen;
         version = ver;
     }
 
-    public static IVersionedSerializer<HeartBeatState> serializer()
-    {
-        return serializer;
-    }
-    
     int getGeneration()
     {
         return generation;
@@ -64,7 +52,7 @@ class HeartBeatState
     {
         version = VersionGenerator.getNextVersion();
     }
-    
+
     int getHeartBeatVersion()
     {
         return version;
@@ -83,14 +71,14 @@ class HeartBeatStateSerializer implements IVersionedSerializer<HeartBeatState>
         dos.writeInt(hbState.getGeneration());
         dos.writeInt(hbState.getHeartBeatVersion());
     }
-    
+
     public HeartBeatState deserialize(DataInput dis, int version) throws IOException
     {
         return new HeartBeatState(dis.readInt(), dis.readInt());
     }
 
-    public long serializedSize(HeartBeatState heartBeatState, int version)
+    public long serializedSize(HeartBeatState state, int version)
     {
-        throw new UnsupportedOperationException();
+        return TypeSizes.NATIVE.sizeof(state.getGeneration()) + TypeSizes.NATIVE.sizeof(state.getHeartBeatVersion());
     }
 }

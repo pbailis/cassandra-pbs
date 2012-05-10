@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,11 +15,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.net;
 
-public class HeaderTypes 
+public class HeaderTypes
 {
     public final static String TASK_PROFILE_CHAIN = "TASK_PROFILE_CHAIN";
-    public static String TASK_ID = "TASK_ID";
+    public static final String TASK_ID = "TASK_ID";
 }

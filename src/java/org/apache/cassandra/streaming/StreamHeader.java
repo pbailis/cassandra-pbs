@@ -1,7 +1,4 @@
-package org.apache.cassandra.streaming;
-
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -10,16 +7,15 @@ package org.apache.cassandra.streaming;
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+package org.apache.cassandra.streaming;
 
 import java.io.*;
 import java.net.InetAddress;
@@ -28,6 +24,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 
+import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.net.CompactEndpointSerializationHelper;
 import org.apache.cassandra.net.MessagingService;
@@ -35,17 +32,7 @@ import org.apache.cassandra.utils.FBUtilities;
 
 public class StreamHeader
 {
-    private static IVersionedSerializer<StreamHeader> serializer;
-
-    static
-    {
-        serializer = new StreamHeaderSerializer();
-    }
-
-    public static IVersionedSerializer<StreamHeader> serializer()
-    {
-        return serializer;
-    }
+    public static final IVersionedSerializer<StreamHeader> serializer = new StreamHeaderSerializer();
 
     public final String table;
 
@@ -70,7 +57,7 @@ public class StreamHeader
     {
         this(table, sessionId, first, pendingFiles, FBUtilities.getBroadcastAddress());
     }
-    
+
     public StreamHeader(String table, long sessionId, PendingFile first, Collection<PendingFile> pendingFiles, InetAddress broadcastAddress)
     {
         this.table = table;
@@ -86,11 +73,11 @@ public class StreamHeader
         {
             dos.writeUTF(sh.table);
             dos.writeLong(sh.sessionId);
-            PendingFile.serializer().serialize(sh.file, dos, version);
+            PendingFile.serializer.serialize(sh.file, dos, version);
             dos.writeInt(sh.pendingFiles.size());
             for(PendingFile file : sh.pendingFiles)
             {
-                PendingFile.serializer().serialize(file, dos, version);
+                PendingFile.serializer.serialize(file, dos, version);
             }
             CompactEndpointSerializationHelper.serialize(sh.broadcastAddress, dos);
         }
@@ -99,13 +86,13 @@ public class StreamHeader
         {
             String table = dis.readUTF();
             long sessionId = dis.readLong();
-            PendingFile file = PendingFile.serializer().deserialize(dis, version);
+            PendingFile file = PendingFile.serializer.deserialize(dis, version);
             int size = dis.readInt();
 
             List<PendingFile> pendingFiles = new ArrayList<PendingFile>(size);
             for (int i = 0; i < size; i++)
             {
-                pendingFiles.add(PendingFile.serializer().deserialize(dis, version));
+                pendingFiles.add(PendingFile.serializer.deserialize(dis, version));
             }
             InetAddress bca = null;
             if (version > MessagingService.VERSION_10)
@@ -113,9 +100,16 @@ public class StreamHeader
             return new StreamHeader(table, sessionId, file, pendingFiles, bca);
         }
 
-        public long serializedSize(StreamHeader streamHeader, int version)
+        public long serializedSize(StreamHeader sh, int version)
         {
-            throw new UnsupportedOperationException();
-        }
+            long size = TypeSizes.NATIVE.sizeof(sh.table);
+            size += TypeSizes.NATIVE.sizeof(sh.sessionId);
+            size += PendingFile.serializer.serializedSize(sh.file, version);
+            size += TypeSizes.NATIVE.sizeof(sh.pendingFiles.size());
+            for(PendingFile file : sh.pendingFiles)
+                size += PendingFile.serializer.serializedSize(file, version);
+            size += CompactEndpointSerializationHelper.serializedSize(sh.broadcastAddress);
+            return size;
+       }
     }
 }

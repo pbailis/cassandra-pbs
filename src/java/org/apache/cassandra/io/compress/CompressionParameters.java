@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -7,14 +7,13 @@
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.apache.cassandra.io.compress;
 
@@ -33,12 +32,15 @@ import org.apache.cassandra.config.ConfigurationException;
 public class CompressionParameters
 {
     public final static int DEFAULT_CHUNK_LENGTH = 65536;
+    public final static double DEFAULT_CRC_CHECK_CHANCE = 1.0;
 
     public static final String SSTABLE_COMPRESSION = "sstable_compression";
     public static final String CHUNK_LENGTH_KB = "chunk_length_kb";
+    public static final String CRC_CHECK_CHANCE = "crc_check_chance";
 
     public final ICompressor sstableCompressor;
     private final Integer chunkLength;
+    public final double crcChance;
     public final Map<String, String> otherOptions; // Unrecognized options, can be use by the compressor
 
     public static CompressionParameters create(Map<? extends CharSequence, ? extends CharSequence> opts) throws ConfigurationException
@@ -49,7 +51,7 @@ public class CompressionParameters
         options.remove(SSTABLE_COMPRESSION);
         options.remove(CHUNK_LENGTH_KB);
         CompressionParameters cp = new CompressionParameters(sstableCompressionClass, parseChunkLength(chunkLength), options);
-        cp.validateChunkLength();
+        cp.validate();
         return cp;
     }
 
@@ -68,6 +70,8 @@ public class CompressionParameters
         this.sstableCompressor = sstableCompressor;
         this.chunkLength = chunkLength;
         this.otherOptions = otherOptions;
+        String chance = otherOptions.get(CRC_CHECK_CHANCE);
+        this.crcChance = (chance == null) ? DEFAULT_CRC_CHECK_CHANCE : Double.parseDouble(chance);
     }
 
     public int chunkLength()
@@ -77,7 +81,7 @@ public class CompressionParameters
 
     private static Class<? extends ICompressor> parseCompressorClass(String className) throws ConfigurationException
     {
-        if (className == null)
+        if (className == null || className.isEmpty())
             return null;
 
         className = className.contains(".") ? className : "org.apache.cassandra.io.compress." + className;
@@ -164,42 +168,31 @@ public class CompressionParameters
     // chunkLength must be a power of 2 because we assume so when
     // computing the chunk number from an uncompressed file offset (see
     // CompressedRandomAccessReader.decompresseChunk())
-    private void validateChunkLength() throws ConfigurationException
+    private void validate() throws ConfigurationException
     {
-        if (chunkLength == null)
-            return; // chunk length not set, this is fine, default will be used
-
-        if (chunkLength <= 0)
-            throw new ConfigurationException("Invalid negative or null " + CHUNK_LENGTH_KB);
-
-        int c = chunkLength;
-        boolean found = false;
-        while (c != 0)
-        {
-            if ((c & 0x01) != 0)
-            {
-                if (found)
-                    throw new ConfigurationException(CHUNK_LENGTH_KB + " must be a power of 2");
-                else
-                    found = true;
-            }
-            c >>= 1;
-        }
-    }
-
-    public Map<CharSequence, CharSequence> asAvroOptions()
-    {
-        Map<CharSequence, CharSequence> options = new HashMap<CharSequence, CharSequence>();
-        for (Map.Entry<String, String> entry : otherOptions.entrySet())
-            options.put(new Utf8(entry.getKey()), new Utf8(entry.getValue()));
-
-        if (sstableCompressor == null)
-            return options;
-
-        options.put(new Utf8(SSTABLE_COMPRESSION), new Utf8(sstableCompressor.getClass().getName()));
+        // if chunk length was not set (chunkLength == null), this is fine, default will be used
         if (chunkLength != null)
-            options.put(new Utf8(CHUNK_LENGTH_KB), new Utf8(chunkLengthInKB()));
-        return options;
+        {
+            if (chunkLength <= 0)
+                throw new ConfigurationException("Invalid negative or null " + CHUNK_LENGTH_KB);
+
+            int c = chunkLength;
+            boolean found = false;
+            while (c != 0)
+            {
+                if ((c & 0x01) != 0)
+                {
+                    if (found)
+                        throw new ConfigurationException(CHUNK_LENGTH_KB + " must be a power of 2");
+                    else
+                        found = true;
+                }
+                c >>= 1;
+            }
+        }
+
+        if (crcChance > 1.0d || crcChance < 0.0d)
+            throw new ConfigurationException("crc_check_chance should be between 0.0 to 1.0");
     }
 
     public Map<String, String> asThriftOptions()

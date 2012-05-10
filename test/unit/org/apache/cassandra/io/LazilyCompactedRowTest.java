@@ -1,6 +1,4 @@
-package org.apache.cassandra.io;
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,18 +6,17 @@ package org.apache.cassandra.io;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *   http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
- * 
  */
-
+package org.apache.cassandra.io;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -34,7 +31,7 @@ import java.util.concurrent.ExecutionException;
 
 import org.junit.Test;
 
-import org.apache.cassandra.CleanupHelper;
+import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.compaction.*;
@@ -53,33 +50,34 @@ import org.apache.cassandra.utils.UUIDGen;
 import static junit.framework.Assert.assertEquals;
 
 
-public class LazilyCompactedRowTest extends CleanupHelper
+public class LazilyCompactedRowTest extends SchemaLoader
 {
     private static void assertBytes(ColumnFamilyStore cfs, int gcBefore) throws IOException
     {
+        AbstractCompactionStrategy strategy = cfs.getCompactionStrategy();
         Collection<SSTableReader> sstables = cfs.getSSTables();
 
         // compare eager and lazy compactions
         AbstractCompactionIterable eager = new CompactionIterable(OperationType.UNKNOWN,
-                                                                  sstables,
+                                                                  strategy.getScanners(sstables),
                                                                   new PreCompactingController(cfs, sstables, gcBefore, false));
         AbstractCompactionIterable lazy = new CompactionIterable(OperationType.UNKNOWN,
-                                                                 sstables,
+                                                                 strategy.getScanners(sstables),
                                                                  new LazilyCompactingController(cfs, sstables, gcBefore, false));
-        assertBytes(sstables, eager, lazy);
+        assertBytes(cfs, sstables, eager, lazy);
 
         // compare eager and parallel-lazy compactions
         eager = new CompactionIterable(OperationType.UNKNOWN,
-                                       sstables,
+                                       strategy.getScanners(sstables),
                                        new PreCompactingController(cfs, sstables, gcBefore, false));
         AbstractCompactionIterable parallel = new ParallelCompactionIterable(OperationType.UNKNOWN,
-                                                                             sstables,
+                                                                             strategy.getScanners(sstables),
                                                                              new CompactionController(cfs, sstables, gcBefore, false),
                                                                              0);
-        assertBytes(sstables, eager, parallel);
+        assertBytes(cfs, sstables, eager, parallel);
     }
 
-    private static void assertBytes(Collection<SSTableReader> sstables, AbstractCompactionIterable ci1, AbstractCompactionIterable ci2) throws IOException
+    private static void assertBytes(ColumnFamilyStore cfs, Collection<SSTableReader> sstables, AbstractCompactionIterable ci1, AbstractCompactionIterable ci2) throws IOException
     {
         CloseableIterator<AbstractCompactedRow> iter1 = ci1.iterator();
         CloseableIterator<AbstractCompactedRow> iter2 = ci2.iterator();
@@ -108,8 +106,8 @@ public class LazilyCompactedRowTest extends CleanupHelper
             new FileOutputStream(tmpFile1).write(out1.getData()); // writing data from row1
             new FileOutputStream(tmpFile2).write(out2.getData()); // writing data from row2
 
-            MappedFileDataInput in1 = new MappedFileDataInput(new FileInputStream(tmpFile1), tmpFile1.getAbsolutePath(), 0);
-            MappedFileDataInput in2 = new MappedFileDataInput(new FileInputStream(tmpFile2), tmpFile2.getAbsolutePath(), 0);
+            MappedFileDataInput in1 = new MappedFileDataInput(new FileInputStream(tmpFile1), tmpFile1.getAbsolutePath(), 0, 0);
+            MappedFileDataInput in2 = new MappedFileDataInput(new FileInputStream(tmpFile2), tmpFile2.getAbsolutePath(), 0, 0);
 
             // key isn't part of what CompactedRow writes, that's done by SSTW.append
 
@@ -118,24 +116,12 @@ public class LazilyCompactedRowTest extends CleanupHelper
             long rowSize2 = SSTableReader.readRowSize(in2, sstables.iterator().next().descriptor);
             assertEquals(rowSize1 + 8, out1.getLength());
             assertEquals(rowSize2 + 8, out2.getLength());
-            // bloom filter
-            IndexHelper.defreezeBloomFilter(in1, rowSize1, false);
-            IndexHelper.defreezeBloomFilter(in2, rowSize2, false);
-            // index
-            int indexSize1 = in1.readInt();
-            int indexSize2 = in2.readInt();
-            assertEquals(indexSize1, indexSize2);
-
-            ByteBuffer bytes1 = in1.readBytes(indexSize1);
-            ByteBuffer bytes2 = in2.readBytes(indexSize2);
-
-            assert bytes1.equals(bytes2);
 
             // cf metadata
-            ColumnFamily cf1 = ColumnFamily.create("Keyspace1", "Standard1");
-            ColumnFamily cf2 = ColumnFamily.create("Keyspace1", "Standard1");
-            ColumnFamily.serializer().deserializeFromSSTableNoColumns(cf1, in1);
-            ColumnFamily.serializer().deserializeFromSSTableNoColumns(cf2, in2);
+            ColumnFamily cf1 = ColumnFamily.create(cfs.metadata);
+            ColumnFamily cf2 = ColumnFamily.create(cfs.metadata);
+            ColumnFamily.serializer.deserializeFromSSTableNoColumns(cf1, in1);
+            ColumnFamily.serializer.deserializeFromSSTableNoColumns(cf2, in2);
             assert cf1.getLocalDeletionTime() == cf2.getLocalDeletionTime();
             assert cf1.getMarkedForDeleteAt() == cf2.getMarkedForDeleteAt();
             // columns
@@ -145,7 +131,7 @@ public class LazilyCompactedRowTest extends CleanupHelper
             {
                 IColumn c1 = cf1.getColumnSerializer().deserialize(in1);
                 IColumn c2 = cf2.getColumnSerializer().deserialize(in2);
-                assert c1.equals(c2);
+                assert c1.equals(c2) : c1.getString(cfs.metadata.comparator) + " != " + c2.getString(cfs.metadata.comparator);
             }
             // that should be everything
             assert in1.available() == 0;
@@ -155,9 +141,10 @@ public class LazilyCompactedRowTest extends CleanupHelper
 
     private void assertDigest(ColumnFamilyStore cfs, int gcBefore) throws IOException, NoSuchAlgorithmException
     {
+        AbstractCompactionStrategy strategy = cfs.getCompactionStrategy();
         Collection<SSTableReader> sstables = cfs.getSSTables();
-        AbstractCompactionIterable ci1 = new CompactionIterable(OperationType.UNKNOWN, sstables, new PreCompactingController(cfs, sstables, gcBefore, false));
-        AbstractCompactionIterable ci2 = new CompactionIterable(OperationType.UNKNOWN, sstables, new LazilyCompactingController(cfs, sstables, gcBefore, false));
+        AbstractCompactionIterable ci1 = new CompactionIterable(OperationType.UNKNOWN, strategy.getScanners(sstables), new PreCompactingController(cfs, sstables, gcBefore, false));
+        AbstractCompactionIterable ci2 = new CompactionIterable(OperationType.UNKNOWN, strategy.getScanners(sstables), new LazilyCompactingController(cfs, sstables, gcBefore, false));
         CloseableIterator<AbstractCompactedRow> iter1 = ci1.iterator();
         CloseableIterator<AbstractCompactedRow> iter2 = ci2.iterator();
 
@@ -232,7 +219,7 @@ public class LazilyCompactedRowTest extends CleanupHelper
             rm.add(new QueryPath("Standard1", null, ByteBufferUtil.bytes(i)), ByteBufferUtil.EMPTY_BYTE_BUFFER, 0);
         rm.apply();
         DataOutputBuffer out = new DataOutputBuffer();
-        RowMutation.serializer().serialize(rm, out, MessagingService.version_);
+        RowMutation.serializer.serialize(rm, out, MessagingService.current_version);
         assert out.getLength() > DatabaseDescriptor.getColumnIndexSize();
         cfs.forceBlockingFlush();
 

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,18 +15,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.net.sink;
 
 import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.apache.cassandra.net.Message;
+import org.apache.cassandra.net.MessageIn;
+import org.apache.cassandra.net.MessageOut;
 
 public class SinkManager
 {
-    private static List<IMessageSink> sinks = new ArrayList<IMessageSink>();
+    private static final List<IMessageSink> sinks = new ArrayList<IMessageSink>();
 
     public static void add(IMessageSink ms)
     {
@@ -38,7 +38,7 @@ public class SinkManager
         sinks.clear();
     }
 
-    public static Message processClientMessage(Message message, String id, InetAddress to)
+    public static MessageOut processOutboundMessage(MessageOut message, String id, InetAddress to)
     {
         if (sinks.isEmpty())
             return message;
@@ -52,7 +52,7 @@ public class SinkManager
         return message;
     }
 
-    public static Message processServerMessage(Message message, String id)
+    public static MessageIn processInboundMessage(MessageIn message, String id)
     {
         if (sinks.isEmpty())
             return message;

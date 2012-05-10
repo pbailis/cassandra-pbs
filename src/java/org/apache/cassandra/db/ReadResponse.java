@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.db;
 
 import java.io.*;
@@ -25,71 +24,60 @@ import org.apache.cassandra.io.IColumnSerializer;
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.utils.ByteBufferUtil;
 
-
 /*
- * The read response message is sent by the server when reading data 
+ * The read response message is sent by the server when reading data
  * this encapsulates the tablename and the row that has been read.
  * The table name is needed so that we can use it to create repairs.
  */
 public class ReadResponse
 {
-private static IVersionedSerializer<ReadResponse> serializer_;
+    public static final IVersionedSerializer<ReadResponse> serializer = new ReadResponseSerializer();
 
-    static
-    {
-        serializer_ = new ReadResponseSerializer();
-    }
+    private final Row row;
+    private final ByteBuffer digest;
 
-    public static IVersionedSerializer<ReadResponse> serializer()
-    {
-        return serializer_;
-    }
-    
-	private final Row row_;
-	private final ByteBuffer digest_;
-
-	public ReadResponse(ByteBuffer digest )
+    public ReadResponse(ByteBuffer digest)
     {
         assert digest != null;
-		digest_= digest;
-        row_ = null;
-	}
+        this.digest= digest;
+        this.row = null;
+    }
 
-	public ReadResponse(Row row)
+    public ReadResponse(Row row)
     {
         assert row != null;
-		row_ = row;
-        digest_ = null;
-	}
-
-	public Row row() 
-    {
-		return row_;
+        this.row = row;
+        this.digest = null;
     }
-        
-	public ByteBuffer digest() 
-    {
-		return digest_;
-	}
 
-	public boolean isDigestQuery()
+    public Row row()
     {
-    	return digest_ != null;
+        return row;
+    }
+
+    public ByteBuffer digest()
+    {
+        return digest;
+    }
+
+    public boolean isDigestQuery()
+    {
+        return digest != null;
     }
 }
 
 class ReadResponseSerializer implements IVersionedSerializer<ReadResponse>
 {
-	public void serialize(ReadResponse response, DataOutput dos, int version) throws IOException
-	{
+    public void serialize(ReadResponse response, DataOutput dos, int version) throws IOException
+    {
         dos.writeInt(response.isDigestQuery() ? response.digest().remaining() : 0);
         ByteBuffer buffer = response.isDigestQuery() ? response.digest() : ByteBufferUtil.EMPTY_BYTE_BUFFER;
         ByteBufferUtil.write(buffer, dos);
         dos.writeBoolean(response.isDigestQuery());
         if (!response.isDigestQuery())
-            Row.serializer().serialize(response.row(), dos, version);
+            Row.serializer.serialize(response.row(), dos, version);
     }
-	
+
     public ReadResponse deserialize(DataInput dis, int version) throws IOException
     {
         byte[] digest = null;
@@ -106,7 +94,7 @@ class ReadResponseSerializer implements IVersionedSerializer<ReadResponse>
         if (!isDigest)
         {
             // This is coming from a remote host
-            row = Row.serializer().deserialize(dis, version, IColumnSerializer.Flag.FROM_REMOTE, ArrayBackedSortedColumns.factory());
+            row = Row.serializer.deserialize(dis, version, IColumnSerializer.Flag.FROM_REMOTE, ArrayBackedSortedColumns.factory());
         }
 
         return isDigest ? new ReadResponse(ByteBuffer.wrap(digest)) : new ReadResponse(row);
@@ -114,12 +102,12 @@ class ReadResponseSerializer implements IVersionedSerializer<ReadResponse>
 
     public long serializedSize(ReadResponse response, int version)
     {
-        int size = DBConstants.intSize;
-        size += DBConstants.boolSize;
-        if (response.isDigestQuery())
-            size += response.digest().remaining();
-        else
-            size += Row.serializer().serializedSize(response.row(), version);
+        TypeSizes typeSizes = TypeSizes.NATIVE;
+        ByteBuffer buffer = response.isDigestQuery() ? response.digest() : ByteBufferUtil.EMPTY_BYTE_BUFFER;
+        int size = typeSizes.sizeof(buffer.remaining());
+        size += typeSizes.sizeof(response.isDigestQuery());
+        if (!response.isDigestQuery())
+            size += Row.serializer.serializedSize(response.row(), version);
         return size;
     }
 }

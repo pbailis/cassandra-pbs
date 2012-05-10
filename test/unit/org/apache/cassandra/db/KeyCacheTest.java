@@ -1,6 +1,6 @@
 package org.apache.cassandra.db;
 /*
- * 
+ *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,16 +8,16 @@ package org.apache.cassandra.db;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *   http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
- * 
+ *
  */
 
 import java.io.IOException;
@@ -33,17 +33,14 @@ import org.apache.cassandra.thrift.ColumnParent;
 import org.junit.AfterClass;
 import org.junit.Test;
 
-import org.apache.cassandra.CleanupHelper;
+import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.Util;
 import org.apache.cassandra.db.filter.QueryPath;
 import org.apache.cassandra.db.compaction.CompactionManager;
-import org.apache.cassandra.io.sstable.Descriptor;
 import org.apache.cassandra.utils.ByteBufferUtil;
-import org.apache.cassandra.utils.Pair;
-
 import static junit.framework.Assert.assertEquals;
 
-public class KeyCacheTest extends CleanupHelper
+public class KeyCacheTest extends SchemaLoader
 {
     private static final String TABLE1 = "KeyCacheSpace";
     private static final String COLUMN_FAMILY1 = "Standard1";
@@ -75,7 +72,7 @@ public class KeyCacheTest extends CleanupHelper
         assertEquals(100, CacheService.instance.keyCache.size());
 
         // really? our caches don't implement the map interface? (hence no .addAll)
-        Map<KeyCacheKey, Long> savedMap = new HashMap<KeyCacheKey, Long>();
+        Map<KeyCacheKey, RowIndexEntry> savedMap = new HashMap<KeyCacheKey, RowIndexEntry>();
         for (KeyCacheKey k : CacheService.instance.keyCache.getKeySet())
         {
             savedMap.put(k, CacheService.instance.keyCache.get(k));

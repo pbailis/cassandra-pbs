@@ -19,7 +19,6 @@
 package org.apache.cassandra.db;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.util.concurrent.ExecutionException;
 
 import org.junit.Test;
@@ -28,12 +27,12 @@ import static junit.framework.Assert.assertNull;
 import org.apache.cassandra.db.filter.QueryFilter;
 import org.apache.cassandra.db.filter.QueryPath;
 
-import org.apache.cassandra.CleanupHelper;
+import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.Util;
 import org.apache.cassandra.utils.ByteBufferUtil;
 
 
-public class RemoveColumnFamilyWithFlush2Test extends CleanupHelper
+public class RemoveColumnFamilyWithFlush2Test extends SchemaLoader
 {
     @Test
     public void testRemoveColumnFamilyWithFlush2() throws IOException, ExecutionException, InterruptedException

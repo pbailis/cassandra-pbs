@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -34,7 +34,7 @@ import org.apache.cassandra.utils.HeapAllocator;
 
 public abstract class AbstractColumnContainer implements IColumnContainer, IIterableColumns
 {
-    private static Logger logger = LoggerFactory.getLogger(AbstractColumnContainer.class);
+    private static final Logger logger = LoggerFactory.getLogger(AbstractColumnContainer.class);
 
     protected final ISortedColumns columns;
 
@@ -46,12 +46,17 @@ public abstract class AbstractColumnContainer implements IColumnContainer, IIter
     @Deprecated // TODO this is a hack to set initial value outside constructor
     public void delete(int localtime, long timestamp)
     {
-        columns.delete(new ISortedColumns.DeletionInfo(timestamp, localtime));
+        columns.delete(new DeletionInfo(timestamp, localtime));
     }
 
     public void delete(AbstractColumnContainer cc2)
     {
-        columns.delete(cc2.columns.getDeletionInfo());
+        delete(cc2.columns.getDeletionInfo());
+    }
+
+    public void delete(DeletionInfo delInfo)
+    {
+        columns.delete(delInfo);
     }
 
     public boolean isMarkedForDelete()
@@ -69,7 +74,12 @@ public abstract class AbstractColumnContainer implements IColumnContainer, IIter
         return columns.getDeletionInfo().localDeletionTime;
     }
 
-    public AbstractType getComparator()
+    public DeletionInfo deletionInfo()
+    {
+        return columns.getDeletionInfo();
+    }
+
+    public AbstractType<?> getComparator()
     {
         return columns.getComparator();
     }
@@ -197,7 +207,7 @@ public abstract class AbstractColumnContainer implements IColumnContainer, IIter
 
     public boolean hasExpiredTombstones(int gcBefore)
     {
-        if (isMarkedForDelete() && getLocalDeletionTime() < gcBefore)
+        if (getLocalDeletionTime() < gcBefore)
             return true;
 
         for (IColumn column : columns)

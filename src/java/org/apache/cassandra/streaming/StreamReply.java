@@ -1,6 +1,4 @@
-package org.apache.cassandra.streaming;
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,35 +6,34 @@ package org.apache.cassandra.streaming;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+package org.apache.cassandra.streaming;
 
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
 
-import java.io.*;
-
+import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.io.IVersionedSerializer;
-import org.apache.cassandra.io.util.FastByteArrayOutputStream;
-import org.apache.cassandra.net.Message;
-import org.apache.cassandra.net.MessageProducer;
-import org.apache.cassandra.service.StorageService;
-import org.apache.cassandra.utils.FBUtilities;
+import org.apache.cassandra.net.MessageOut;
+import org.apache.cassandra.net.MessagingService;
 
-class StreamReply implements MessageProducer
+public class StreamReply
 {
     static enum Status
     {
         FILE_FINISHED,
         FILE_RETRY,
         SESSION_FINISHED,
+        SESSION_FAILURE,
     }
 
     public static final IVersionedSerializer<StreamReply> serializer = new FileStatusSerializer();
@@ -52,12 +49,9 @@ class StreamReply implements MessageProducer
         this.sessionId = sessionId;
     }
 
-    public Message getMessage(Integer version) throws IOException
+    public MessageOut<StreamReply> createMessage()
     {
-    	FastByteArrayOutputStream bos = new FastByteArrayOutputStream();
-        DataOutputStream dos = new DataOutputStream( bos );
-        serializer.serialize(this, dos, version);
-        return new Message(FBUtilities.getBroadcastAddress(), StorageService.Verb.STREAM_REPLY, bos.toByteArray(), version);
+        return new MessageOut<StreamReply>(MessagingService.Verb.STREAM_REPLY, this, serializer);
     }
 
     @Override
@@ -87,9 +81,9 @@ class StreamReply implements MessageProducer
             return new StreamReply(targetFile, sessionId, action);
         }
 
-        public long serializedSize(StreamReply streamReply, int version)
+        public long serializedSize(StreamReply reply, int version)
         {
-            throw new UnsupportedOperationException();
+            return TypeSizes.NATIVE.sizeof(reply.sessionId) + TypeSizes.NATIVE.sizeof(reply.file) + TypeSizes.NATIVE.sizeof(reply.action.ordinal());
         }
     }
 }

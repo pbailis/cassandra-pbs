@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -7,59 +7,74 @@
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.apache.cassandra.db.compaction;
 
-import java.util.*;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.db.ColumnFamily;
 import org.apache.cassandra.db.ColumnFamilyStore;
+import org.apache.cassandra.db.DataTracker;
 import org.apache.cassandra.db.DecoratedKey;
-import org.apache.cassandra.db.EchoedRow;
 import org.apache.cassandra.io.sstable.SSTableIdentityIterator;
 import org.apache.cassandra.io.sstable.SSTableReader;
+import org.apache.cassandra.service.StorageService;
+import org.apache.cassandra.utils.IntervalTree.Interval;
+import org.apache.cassandra.utils.IntervalTree.IntervalTree;
+import org.apache.cassandra.utils.Throttle;
 
 /**
  * Manage compaction options.
  */
 public class CompactionController
 {
-    private static Logger logger = LoggerFactory.getLogger(CompactionController.class);
+    private static final Logger logger = LoggerFactory.getLogger(CompactionController.class);
 
     private final ColumnFamilyStore cfs;
-    private final Set<SSTableReader> sstables;
-    private final boolean forceDeserialize;
+    private final IntervalTree<SSTableReader> overlappingTree;
 
     public final int gcBefore;
-    public boolean keyExistenceIsExpensive;
     public final int mergeShardBefore;
+    private final Throttle throttle = new Throttle("Cassandra_Throttle", new Throttle.ThroughputFunction()
+    {
+        /** @return Instantaneous throughput target in bytes per millisecond. */
+        public int targetThroughput()
+        {
+            if (DatabaseDescriptor.getCompactionThroughputMbPerSec() < 1 || StorageService.instance.isBootstrapMode())
+                // throttling disabled
+                return 0;
+            // total throughput
+            int totalBytesPerMS = DatabaseDescriptor.getCompactionThroughputMbPerSec() * 1024 * 1024 / 1000;
+            // per stream throughput (target bytes per MS)
+            return totalBytesPerMS / Math.max(1, CompactionManager.instance.getActiveCompactions());
+        }
+    });
 
     public CompactionController(ColumnFamilyStore cfs, Collection<SSTableReader> sstables, int gcBefore, boolean forceDeserialize)
     {
         assert cfs != null;
         this.cfs = cfs;
-        this.sstables = new HashSet<SSTableReader>(sstables);
         this.gcBefore = gcBefore;
         // If we merge an old NodeId id, we must make sure that no further increment for that id are in an active memtable.
         // For that, we must make sure that this id was renewed before the creation of the oldest unflushed memtable. We
         // add 5 minutes to be sure we're on the safe side in terms of thread safety (though we should be fine in our
         // current 'stop all write during memtable switch' situation).
         this.mergeShardBefore = (int) ((cfs.oldestUnflushedMemtable() + 5 * 3600) / 1000);
-        this.forceDeserialize = forceDeserialize;
-        keyExistenceIsExpensive = cfs.getCompactionStrategy().isKeyExistenceExpensive(this.sstables);
+        Set<SSTableReader> overlappingSSTables = cfs.getOverlappingSSTables(sstables);
+        overlappingTree = DataTracker.buildIntervalTree(overlappingSSTables);
     }
 
     public String getKeyspace()
@@ -78,31 +93,18 @@ public class CompactionController
      */
     public boolean shouldPurge(DecoratedKey key)
     {
-        return !cfs.isKeyInRemainingSSTables(key, sstables);
-    }
-
-    public boolean needDeserialize()
-    {
-        if (forceDeserialize)
-            return true;
-
-        for (SSTableReader sstable : sstables)
-            if (!sstable.descriptor.isLatestVersion)
-                return true;
-
-        return false;
+        List<SSTableReader> filteredSSTables = overlappingTree.search(new Interval(key, key));
+        for (SSTableReader sstable : filteredSSTables)
+        {
+            if (sstable.getBloomFilter().isPresent(key.key))
+                return false;
+        }
+        return true;
     }
 
     public void invalidateCachedRow(DecoratedKey key)
     {
         cfs.invalidateCachedRow(key);
-    }
-
-    public void removeDeletedInCache(DecoratedKey key)
-    {
-        ColumnFamily cachedRow = cfs.getRawCachedRow(key);
-        if (cachedRow != null)
-            ColumnFamilyStore.removeDeleted(cachedRow, gcBefore);
     }
 
     /**
@@ -118,15 +120,6 @@ public class CompactionController
         for (SSTableIdentityIterator row : rows)
             rowSize += row.dataSize;
 
-        // in-memory echoedrow is only enabled if we think checking for the key's existence in the other sstables,
-        // is going to be less expensive than simply de/serializing the row again
-        if (rows.size() == 1 && !needDeserialize()
-            && (rowSize > DatabaseDescriptor.getInMemoryCompactionLimit() || !keyExistenceIsExpensive)
-            && !shouldPurge(rows.get(0).getKey()))
-        {
-            return new EchoedRow(rows.get(0));
-        }
-
         if (rowSize > DatabaseDescriptor.getInMemoryCompactionLimit())
         {
             String keyString = cfs.metadata.getKeyValidator().getString(rows.get(0).getKey().key);
@@ -141,5 +134,10 @@ public class CompactionController
     public AbstractCompactedRow getCompactedRow(SSTableIdentityIterator row)
     {
         return getCompactedRow(Collections.singletonList(row));
+    }
+    
+    public void mayThrottle(long currentBytes)
+    {
+        throttle.throttle(currentBytes);
     }
 }

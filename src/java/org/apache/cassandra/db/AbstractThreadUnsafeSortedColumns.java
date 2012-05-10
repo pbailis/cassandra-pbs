@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -30,7 +30,7 @@ public abstract class AbstractThreadUnsafeSortedColumns implements ISortedColumn
 
     public AbstractThreadUnsafeSortedColumns()
     {
-        deletionInfo = new DeletionInfo();
+        deletionInfo = DeletionInfo.LIVE;
     }
 
     public DeletionInfo getDeletionInfo()
@@ -48,8 +48,8 @@ public abstract class AbstractThreadUnsafeSortedColumns implements ISortedColumn
     public void maybeResetDeletionTimes(int gcBefore)
     {
         // Update if it's not MIN_VALUE anymore and it has expired
-        if (deletionInfo.localDeletionTime != Integer.MIN_VALUE && deletionInfo.localDeletionTime <= gcBefore)
-            deletionInfo = new DeletionInfo();
+        if (deletionInfo.localDeletionTime <= gcBefore)
+            deletionInfo = DeletionInfo.LIVE;
     }
 
     public void retainAll(ISortedColumns columns)
@@ -58,7 +58,7 @@ public abstract class AbstractThreadUnsafeSortedColumns implements ISortedColumn
         Iterator<IColumn> toRetain = columns.iterator();
         IColumn current = iter.hasNext() ? iter.next() : null;
         IColumn retain = toRetain.hasNext() ? toRetain.next() : null;
-        AbstractType comparator = getComparator();
+        AbstractType<?> comparator = getComparator();
         while (current != null && retain != null)
         {
             int c = comparator.compare(current.name(), retain.name());

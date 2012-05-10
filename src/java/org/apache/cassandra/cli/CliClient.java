@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,12 +17,14 @@
  */
 package org.apache.cassandra.cli;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.InetAddress;
-import java.net.UnknownHostException;
+import java.io.PrintStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.util.*;
 
 import com.google.common.base.Predicate;
@@ -35,7 +37,6 @@ import org.antlr.runtime.tree.Tree;
 import org.apache.cassandra.auth.IAuthenticator;
 import org.apache.cassandra.config.ConfigurationException;
 import org.apache.cassandra.db.ColumnFamilyStoreMBean;
-import org.apache.cassandra.db.compaction.CompactionInfo;
 import org.apache.cassandra.db.compaction.CompactionManagerMBean;
 import org.apache.cassandra.db.compaction.OperationType;
 import org.apache.cassandra.db.marshal.*;
@@ -49,6 +50,12 @@ import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.UUIDGen;
 import org.apache.thrift.TBaseHelper;
 import org.apache.thrift.TException;
+import org.codehaus.jackson.JsonEncoding;
+import org.codehaus.jackson.JsonFactory;
+import org.codehaus.jackson.JsonGenerator;
+import org.codehaus.jackson.JsonParser;
+import org.codehaus.jackson.JsonToken;
+import org.codehaus.jackson.type.TypeReference;
 import org.yaml.snakeyaml.constructor.Constructor;
 import org.yaml.snakeyaml.Loader;
 import org.yaml.snakeyaml.TypeDescription;
@@ -73,14 +80,14 @@ public class CliClient
         ASCII         (AsciiType.instance),
         COUNTERCOLUMN (CounterColumnType.instance);
 
-        private AbstractType validator;
+        private AbstractType<?> validator;
 
-        Function(AbstractType validator)
+        Function(AbstractType<?> validator)
         {
             this.validator = validator;
         }
 
-        public AbstractType getValidator()
+        public AbstractType<?> getValidator()
         {
             return this.validator;
         }
@@ -120,12 +127,8 @@ public class CliClient
         COMPARATOR,
         SUBCOMPARATOR,
         COMMENT,
-        ROWS_CACHED,
-        ROW_CACHE_SAVE_PERIOD,
-        ROW_CACHE_KEYS_TO_SAVE,
-        KEYS_CACHED,
-        KEY_CACHE_SAVE_PERIOD,
         READ_REPAIR_CHANCE,
+        DCLOCAL_READ_REPAIR_CHANCE,
         GC_GRACE,
         COLUMN_METADATA,
         MEMTABLE_OPERATIONS,
@@ -134,31 +137,33 @@ public class CliClient
         MIN_COMPACTION_THRESHOLD,
         MAX_COMPACTION_THRESHOLD,
         REPLICATE_ON_WRITE,
-        ROW_CACHE_PROVIDER,
         KEY_VALIDATION_CLASS,
         COMPACTION_STRATEGY,
         COMPACTION_STRATEGY_OPTIONS,
         COMPRESSION_OPTIONS,
-        BLOOM_FILTER_FP_CHANCE
+        BLOOM_FILTER_FP_CHANCE,
+        CACHING
     }
 
     private static final String DEFAULT_PLACEMENT_STRATEGY = "org.apache.cassandra.locator.NetworkTopologyStrategy";
     private final String NEWLINE = System.getProperty("line.separator");
     private final String TAB = "  ";
 
-    private Cassandra.Client thriftClient = null;
-    private CliSessionState sessionState  = null;
+    private final Cassandra.Client thriftClient;
+    private final CliSessionState sessionState;
     private String keySpace = null;
     private String username = null;
-    private Map<String, KsDef> keyspacesMap = new HashMap<String, KsDef>();
-    private Map<String, AbstractType> cfKeysComparators;
+    private final Map<String, KsDef> keyspacesMap = new HashMap<String, KsDef>();
+    private final Map<String, AbstractType<?>> cfKeysComparators;
     private ConsistencyLevel consistencyLevel = ConsistencyLevel.ONE;
+    private final CfAssumptions assumptions = new CfAssumptions();
     private CliUserHelp help;
     public CliClient(CliSessionState cliSessionState, Cassandra.Client thriftClient)
     {
         this.sessionState = cliSessionState;
         this.thriftClient = thriftClient;
-        this.cfKeysComparators = new HashMap<String, AbstractType>();
+        this.cfKeysComparators = new HashMap<String, AbstractType<?>>();
+        assumptions.readAssumptions();
     }
 
     private CliUserHelp getHelp()
@@ -193,7 +198,7 @@ public class CliClient
         sessionState.out.println(getHelp().banner);
     }
 
-    // Execute a CLI Statement 
+    // Execute a CLI Statement
     public void executeCLIStatement(String statement) throws CharacterCodingException, TException, TimedOutException, NotFoundException, NoSuchFieldException, InvalidRequestException, UnavailableException, InstantiationException, IllegalAccessException, ClassNotFoundException, SchemaDisagreementException
     {
         Tree tree = CliCompiler.compileQuery(statement);
@@ -305,16 +310,20 @@ public class CliClient
     private void cleanupAndExit()
     {
         CliMain.disconnect();
+        assumptions.writeAssumptions();
         System.exit(0);
     }
-    
+
     public KsDef getKSMetaData(String keyspace)
             throws NotFoundException, InvalidRequestException, TException
     {
         // Lazily lookup keyspace meta-data.
         if (!(keyspacesMap.containsKey(keyspace)))
+        {
             keyspacesMap.put(keyspace, thriftClient.describe_keyspace(keyspace));
-        
+            assumptions.replayAssumptions(keyspace);
+        }
+
         return keyspacesMap.get(keyspace);
     }
 
@@ -348,9 +357,9 @@ public class CliClient
 
         String columnFamily = CliCompiler.getColumnFamily(columnFamilySpec, keyspacesMap.get(keySpace).cf_defs);
         int columnSpecCnt = CliCompiler.numColumnSpecifiers(columnFamilySpec);
-       
+
         ColumnParent colParent = new ColumnParent(columnFamily).setSuper_column((ByteBuffer) null);
-       
+
         if (columnSpecCnt != 0)
         {
             Tree columnTree = columnFamilySpec.getChild(2);
@@ -368,8 +377,8 @@ public class CliClient
         int count = thriftClient.get_count(getKeyAsBytes(columnFamily, columnFamilySpec.getChild(1)), colParent, predicate, consistencyLevel);
         sessionState.out.printf("%d columns%n", count);
     }
-    
-    private void executeDelete(Tree statement) 
+
+    private void executeDelete(Tree statement)
             throws TException, InvalidRequestException, UnavailableException, TimedOutException
     {
         if (!CliMain.isConnected() || !hasKeySpace())
@@ -386,12 +395,14 @@ public class CliClient
         byte[] superColumnName = null;
         byte[] columnName = null;
         boolean isSuper = cfDef.column_type.equals("Super");
-     
+
         if ((columnSpecCnt < 0) || (columnSpecCnt > 2))
         {
             sessionState.out.println("Invalid row, super column, or column specification.");
             return;
         }
+
+        long startTime = System.currentTimeMillis();
 
         Tree columnTree = (columnSpecCnt >= 1)
                            ? columnFamilySpec.getChild(2)
@@ -446,12 +457,13 @@ public class CliClient
             thriftClient.remove(key, path, FBUtilities.timestampMicros(), consistencyLevel);
         }
         sessionState.out.println(String.format("%s removed.", (columnSpecCnt == 0) ? "row" : "column"));
+        elapsedTime(startTime);
     }
 
     private void doSlice(String keyspace, ByteBuffer key, String columnFamily, byte[] superColumnName, int limit)
             throws InvalidRequestException, UnavailableException, TimedOutException, TException, IllegalAccessException, NotFoundException, InstantiationException, NoSuchFieldException
     {
-        
+
         long startTime = System.currentTimeMillis();
         ColumnParent parent = new ColumnParent(columnFamily);
         if(superColumnName != null)
@@ -464,7 +476,7 @@ public class CliClient
         boolean isSuperCF = cfDef.column_type.equals("Super");
 
         List<ColumnOrSuperColumn> columns = thriftClient.get_slice(key, parent, predicate, consistencyLevel);
-        AbstractType validator;
+        AbstractType<?> validator;
 
         // Print out super columns or columns.
         for (ColumnOrSuperColumn cosc : columns)
@@ -481,7 +493,7 @@ public class CliClient
                                                     validator.getString(col.value), col.timestamp,
                                                     col.isSetTtl() ? String.format(", ttl=%d", col.getTtl()) : "");
                 }
-                
+
                 sessionState.out.println(")");
             }
             else if (cosc.isSetColumn())
@@ -520,12 +532,12 @@ public class CliClient
                 sessionState.out.printf("=> (counter=%s, value=%s)%n", formattedName, column.value);
             }
         }
-        
+
         sessionState.out.println("Returned " + columns.size() + " results.");
         elapsedTime(startTime);
     }
 
-    private AbstractType getFormatType(String compareWith)
+    private AbstractType<?> getFormatType(String compareWith)
     {
         Function function;
 
@@ -563,7 +575,7 @@ public class CliClient
         int columnSpecCnt = CliCompiler.numColumnSpecifiers(columnFamilySpec);
         CfDef cfDef = getCfDef(columnFamily);
         boolean isSuper = cfDef.column_type.equals("Super");
-        
+
         byte[] superColumnName = null;
         ByteBuffer columnName;
 
@@ -627,7 +639,7 @@ public class CliClient
             return;
         }
 
-        AbstractType validator = getValidatorForValue(cfDef, TBaseHelper.byteBufferToByteArray(columnName));
+        AbstractType<?> validator = getValidatorForValue(cfDef, TBaseHelper.byteBufferToByteArray(columnName));
 
         // Perform a get()
         ColumnPath path = new ColumnPath(columnFamily);
@@ -653,7 +665,7 @@ public class CliClient
             return;
         }
 
-        byte[] columnValue = column.getValue();       
+        byte[] columnValue = column.getValue();
         String valueAsString;
 
         // we have ^(CONVERT_TO_TYPE <type>) inside of GET statement
@@ -664,7 +676,7 @@ public class CliClient
             // .getText() will give us <type>
             String typeName = CliUtils.unescapeSQLString(typeTree.getText());
             // building AbstractType from <type>
-            AbstractType valueValidator = getFormatType(typeName);
+            AbstractType<?> valueValidator = getFormatType(typeName);
 
             // setting value for output
             valueAsString = valueValidator.getString(ByteBuffer.wrap(columnValue));
@@ -731,7 +743,7 @@ public class CliClient
         String columnFamily = CliCompiler.getColumnFamily(statement, keyspacesMap.get(keySpace).cf_defs);
         // ^(CONDITIONS ^(CONDITION $column $value) ...)
         Tree conditions = statement.getChild(1);
-        
+
         // fetching column family definition
         CfDef columnFamilyDef = getCfDef(columnFamily);
 
@@ -791,8 +803,8 @@ public class CliClient
             {
                 throw new IllegalArgumentException("LIMIT should be greater than zero.");
             }
-            
-            clause.setCount(limitValue);    
+
+            clause.setCount(limitValue);
         }
 
         try
@@ -818,7 +830,7 @@ public class CliClient
     {
         if (!CliMain.isConnected() || !hasKeySpace())
             return;
-        
+
         long startTime = System.currentTimeMillis();
         // ^(NODE_COLUMN_ACCESS <cf> <key> <column>)
         Tree columnFamilySpec = statement.getChild(0);
@@ -875,7 +887,7 @@ public class CliClient
             parent.setSuper_column(superColumnName);
 
         Column columnToInsert = new Column(columnName).setValue(columnValueInBytes).setTimestamp(FBUtilities.timestampMicros());
-        
+
         // children count = 3 mean that we have ttl in arguments
         if (statement.getChildCount() == 3)
         {
@@ -914,7 +926,7 @@ public class CliClient
         String columnFamily = CliCompiler.getColumnFamily(columnFamilySpec, keyspacesMap.get(keySpace).cf_defs);
         ByteBuffer key = getKeyAsBytes(columnFamily, columnFamilySpec.getChild(1));
         int columnSpecCnt = CliCompiler.numColumnSpecifiers(columnFamilySpec);
-        
+
         byte[] superColumnName = null;
         ByteBuffer columnName;
 
@@ -973,7 +985,7 @@ public class CliClient
     {
         if (!CliMain.isConnected())
             return;
-        
+
         sessionState.out.println(thriftClient.describe_cluster_name());
     }
 
@@ -986,9 +998,9 @@ public class CliClient
 
         if (!CliMain.isConnected())
             return;
-        
+
         // first value is the keyspace name, after that it is all key=value
-        String keyspaceName = statement.getChild(0).getText();
+        String keyspaceName = CliUtils.unescapeSQLString(statement.getChild(0).getText());
         KsDef ksDef = new KsDef(keyspaceName, DEFAULT_PLACEMENT_STRATEGY, new LinkedList<CfDef>());
 
         try
@@ -1058,7 +1070,8 @@ public class CliClient
             String mySchemaVersion = thriftClient.system_update_keyspace(updatedKsDef);
             sessionState.out.println(mySchemaVersion);
             validateSchemaIsSettled(mySchemaVersion);
-            keyspacesMap.put(keyspaceName, thriftClient.describe_keyspace(keyspaceName));
+            keyspacesMap.remove(keyspaceName);
+            getKSMetaData(keySpace);
         }
         catch (InvalidRequestException e)
         {
@@ -1113,13 +1126,10 @@ public class CliClient
     private KsDef updateKsDefAttributes(Tree statement, KsDef ksDefToUpdate)
     {
         KsDef ksDef = new KsDef(ksDefToUpdate);
-        // server helpfully sets deprecated replication factor when it sends a KsDef back, for older clients.
-        // we need to unset that on the new KsDef we create to avoid being treated as a legacy client in return.
-        ksDef.unsetReplication_factor();
 
-        // removing all column definitions - thrift system_update_keyspace method requires that 
+        // removing all column definitions - thrift system_update_keyspace method requires that
         ksDef.setCf_defs(new LinkedList<CfDef>());
-        
+
         for(int i = 1; i < statement.getChildCount(); i += 2)
         {
             String currentStatement = statement.getChild(i).getText().toUpperCase();
@@ -1128,7 +1138,7 @@ public class CliClient
 
             switch(mArgument)
             {
-            case PLACEMENT_STRATEGY: 
+            case PLACEMENT_STRATEGY:
                 ksDef.setStrategy_class(CliUtils.unescapeSQLString(mValue));
                 break;
             case STRATEGY_OPTIONS:
@@ -1153,7 +1163,6 @@ public class CliClient
             {
                 SimpleSnitch snitch = new SimpleSnitch();
                 Map<String, String> options = new HashMap<String, String>();
-
                 try
                 {
                     options.put(snitch.getDatacenter(InetAddress.getLocalHost()), "1");
@@ -1162,14 +1171,13 @@ public class CliClient
                 {
                     throw new RuntimeException(e);
                 }
-
                 ksDef.setStrategy_options(options);
             }
         }
 
         return ksDef;
     }
-    
+
     /**
      * Update column family definition attributes
      * @param statement - ANTLR tree representing current statement
@@ -1207,6 +1215,14 @@ public class CliClient
                     throw new RuntimeException("Error: read_repair_chance must be between 0 and 1.");
 
                 cfDef.setRead_repair_chance(chance);
+                break;
+            case DCLOCAL_READ_REPAIR_CHANCE:
+                double localChance = Double.parseDouble(mValue);
+
+                if (localChance < 0 || localChance > 1)
+                    throw new RuntimeException("Error: dclocal_read_repair_chance must be between 0 and 1.");
+
+                cfDef.setDclocal_read_repair_chance(localChance);
                 break;
             case GC_GRACE:
                 cfDef.setGc_grace_seconds(Integer.parseInt(mValue));
@@ -1248,6 +1264,9 @@ public class CliClient
             case BLOOM_FILTER_FP_CHANCE:
                 cfDef.setBloom_filter_fp_chance(Double.parseDouble(mValue));
                 break;
+            case CACHING:
+                cfDef.setCaching(CliUtils.unescapeSQLString(mValue));
+                break;
             default:
                 //must match one of the above or we'd throw an exception at the valueOf statement above.
                 assert(false);
@@ -1264,7 +1283,7 @@ public class CliClient
      * @throws TException - exception
      * @throws InvalidRequestException - exception
      * @throws NotFoundException - exception
-     * @throws SchemaDisagreementException 
+     * @throws SchemaDisagreementException
      */
     private void executeDelKeySpace(Tree statement)
             throws TException, InvalidRequestException, NotFoundException, SchemaDisagreementException
@@ -1276,7 +1295,7 @@ public class CliClient
         String version = thriftClient.system_drop_keyspace(keyspaceName);
         sessionState.out.println(version);
         validateSchemaIsSettled(version);
-       
+
         if (keyspaceName.equals(keySpace)) //we just deleted the keyspace we were authenticated too
             keySpace = null;
     }
@@ -1287,9 +1306,9 @@ public class CliClient
      * @throws TException - exception
      * @throws InvalidRequestException - exception
      * @throws NotFoundException - exception
-     * @throws SchemaDisagreementException 
+     * @throws SchemaDisagreementException
      */
-    private void executeDelColumnFamily(Tree statement) 
+    private void executeDelColumnFamily(Tree statement)
             throws TException, InvalidRequestException, NotFoundException, SchemaDisagreementException
     {
         if (!CliMain.isConnected() || !hasKeySpace())
@@ -1315,6 +1334,8 @@ public class CliClient
         String rawStartKey = "";
         String rawEndKey = "";
         int limitCount = Integer.MAX_VALUE; // will reset to default later if it's not specified
+        int columnCount = Integer.MAX_VALUE; // will reset to default later if it's not specified
+        boolean reversed = false;
 
         // optional arguments: key range and limit
         for (int i = 1; i < statement.getChildCount(); i++)
@@ -1329,17 +1350,46 @@ public class CliClient
                         rawEndKey = CliUtils.unescapeSQLString(child.getChild(1).getText());
                 }
             }
-            else
+            else if (child.getType() == CliParser.NODE_LIMIT)
             {
                 if (child.getChildCount() != 1)
                 {
                     sessionState.out.println("Invalid limit clause");
                     return;
                 }
+
                 limitCount = Integer.parseInt(child.getChild(0).getText());
                 if (limitCount <= 0)
                 {
                     sessionState.out.println("Invalid limit " + limitCount);
+                    return;
+                }
+            }
+            else if (child.getType() == CliParser.NODE_COLUMNS)
+            {
+                if ((child.getChildCount() < 1) || (child.getChildCount() > 2))
+                {
+                    sessionState.err.println("Invalid columns clause.");
+                    return;
+                }
+
+                String columns = child.getChild(0).getText();
+
+                try
+                {
+                    columnCount = Integer.parseInt(columns);
+                    if (columnCount < 0)
+                    {
+                        sessionState.err.println("Invalid column limit: " + columnCount);
+                        return;
+                    }
+
+                    if (child.getChildCount() == 2)
+                        reversed = child.getChild(1).getType() == CliParser.NODE_REVERSED;
+                }
+                catch (NumberFormatException nfe)
+                {
+                    sessionState.err.println("Invalid column number format: " + columns);
                     return;
                 }
             }
@@ -1350,6 +1400,12 @@ public class CliClient
             limitCount = 100;
             sessionState.out.println("Using default limit of 100");
         }
+        if (columnCount == Integer.MAX_VALUE)
+        {
+            columnCount = 100;
+            sessionState.out.println("Using default column limit of 100");
+        }
+
 
         CfDef columnFamilyDef = getCfDef(columnFamily);
 
@@ -1357,12 +1413,13 @@ public class CliClient
         SlicePredicate predicate = new SlicePredicate();
         SliceRange sliceRange = new SliceRange();
         sliceRange.setStart(new byte[0]).setFinish(new byte[0]);
-        sliceRange.setCount(Integer.MAX_VALUE);
+        sliceRange.setCount(columnCount);
+        sliceRange.setReversed(reversed);
         predicate.setSlice_range(sliceRange);
 
         // set the key range
         KeyRange range = new KeyRange(limitCount);
-        AbstractType keyComparator = this.cfKeysComparators.get(columnFamily);
+        AbstractType<?> keyComparator = this.cfKeysComparators.get(columnFamily);
         ByteBuffer startKey = rawStartKey.isEmpty() ? ByteBufferUtil.EMPTY_BYTE_BUFFER : getBytesAccordingToType(rawStartKey, keyComparator);
         ByteBuffer endKey = rawEndKey.isEmpty() ? ByteBufferUtil.EMPTY_BYTE_BUFFER : getBytesAccordingToType(rawEndKey, keyComparator);
         range.setStart_key(startKey).setEnd_key(endKey);
@@ -1420,7 +1477,7 @@ public class CliClient
         if (!CliMain.isConnected() || !hasKeySpace())
             return;
 
-        // getting CfDef, it will fail if there is no such column family in current keySpace. 
+        // getting CfDef, it will fail if there is no such column family in current keySpace.
         CfDef cfDef = getCfDef(CliCompiler.getColumnFamily(columnFamily, keyspacesMap.get(keySpace).cf_defs));
 
         thriftClient.truncate(cfDef.getName());
@@ -1464,25 +1521,54 @@ public class CliClient
             return;
 
         String cfName = CliCompiler.getColumnFamily(statement, keyspacesMap.get(keySpace).cf_defs);
-        CfDef columnFamily = getCfDef(cfName);
 
         // VALIDATOR | COMPARATOR | KEYS | SUB_COMPARATOR
         String assumptionElement = statement.getChild(1).getText().toUpperCase();
-        // used to store in this.cfKeysComparator
-        AbstractType comparator;
+
 
         // Could be UTF8Type, IntegerType, LexicalUUIDType etc.
-        String defaultType = statement.getChild(2).getText();
+        String defaultType = CliUtils.unescapeSQLString(statement.getChild(2).getText());
+        
+        if (applyAssumption(cfName, assumptionElement, defaultType))
+        {
+            assumptions.addAssumption(keySpace, cfName, assumptionElement, defaultType);
+            sessionState.out.println(String.format("Assumption for column family '%s' added successfully.", cfName));
+        }
+    }
+    
+    private boolean applyAssumption(String cfName, String assumptionElement, String defaultType)
+    {
+        CfDef columnFamily;
 
         try
         {
-            comparator = Function.valueOf(defaultType.toUpperCase()).getValidator();
+            columnFamily = getCfDef(cfName);
         }
-        catch (Exception e)
+        catch (RuntimeException e)
         {
-            String functions = Function.getFunctionNames();
-            sessionState.out.println("Type '" + defaultType + "' was not found. Available: " + functions);
-            return;
+            return false; // just fail if CF does not exist
+        }
+
+        // used to store in this.cfKeysComparator
+        AbstractType<?> comparator;
+        
+        try
+        {
+            comparator = TypeParser.parse(defaultType);
+        }
+        catch (ConfigurationException e)
+        {
+            try
+            {
+                comparator = Function.valueOf(defaultType.toUpperCase()).getValidator();
+            }
+            catch (Exception ne)
+            {
+                String functions = Function.getFunctionNames();
+                sessionState.out.println("Type '" + defaultType + "' was not found. Available: " + functions
+                                         + " Or any class which extends o.a.c.db.marshal.AbstractType.");
+                return false;
+            }
         }
 
         // making string representation look property e.g. o.a.c.db.marshal.UTF8Type
@@ -1508,10 +1594,10 @@ public class CliClient
         {
             String elements = "VALIDATOR, COMPARATOR, KEYS, SUB_COMPARATOR.";
             sessionState.out.println(String.format("'%s' is invalid. Available: %s", assumptionElement, elements));
-            return;
+            return false;
         }
 
-        sessionState.out.println(String.format("Assumption for column family '%s' added successfully.", columnFamily.getName()));
+        return true;
     }
 
     // SHOW API VERSION
@@ -1519,7 +1605,7 @@ public class CliClient
     {
         if (!CliMain.isConnected())
             return;
-        
+
         sessionState.out.println(thriftClient.describe_version());
     }
 
@@ -1562,24 +1648,23 @@ public class CliClient
         else
             ksIter = keyspaces.iterator();
 
-
-        final StringBuilder sb = new StringBuilder();
         while (ksIter.hasNext())
-            showKeyspace(sb, ksIter.next());
+            showKeyspace(sessionState.out, ksIter.next());
 
-        sessionState.out.printf(sb.toString());
+        sessionState.out.flush();
     }
 
     /**
      * Creates a CLI script to create the Keyspace it's Column Families
-     * @param sb StringBuilder to write to.
+     *
+     * @param output StringBuilder to write to.
      * @param ksDef KsDef to create the cli script for.
      */
-    private void showKeyspace(StringBuilder sb, KsDef ksDef)
+    private void showKeyspace(PrintStream output, KsDef ksDef)
     {
-        sb.append("create keyspace " + ksDef.name);
+        output.append("create keyspace ").append(ksDef.name);
 
-        writeAttr(sb, true, "placement_strategy", normaliseType(ksDef.strategy_class, "org.apache.cassandra.locator"));
+        writeAttr(output, true, "placement_strategy", normaliseType(ksDef.strategy_class, "org.apache.cassandra.locator"));
 
         if (ksDef.strategy_options != null && !ksDef.strategy_options.isEmpty())
         {
@@ -1592,49 +1677,56 @@ public class CliClient
                 prefix = ", ";
             }
             opts.append("}");
-            writeAttrRaw(sb, false, "strategy_options", opts.toString());
+            writeAttrRaw(output, false, "strategy_options", opts.toString());
         }
 
-        writeAttr(sb, false, "durable_writes", ksDef.durable_writes);
+        writeAttr(output, false, "durable_writes", ksDef.durable_writes);
 
-        sb.append(";" + NEWLINE);
-        sb.append(NEWLINE);
+        output.append(";").append(NEWLINE);
+        output.append(NEWLINE);
 
-        sb.append("use " + ksDef.name + ";");
-        sb.append(NEWLINE);
-        sb.append(NEWLINE);
+        output.append("use " + ksDef.name + ";");
+        output.append(NEWLINE);
+        output.append(NEWLINE);
 
         Collections.sort(ksDef.cf_defs, new CfDefNamesComparator());
         for (CfDef cfDef : ksDef.cf_defs)
-            showColumnFamily(sb, cfDef);
-        sb.append(NEWLINE);
-        sb.append(NEWLINE);
+            showColumnFamily(output, cfDef);
+        output.append(NEWLINE);
+        output.append(NEWLINE);
     }
 
     /**
      * Creates a CLI script for the CfDef including meta data to the supplied StringBuilder.
-     * @param sb
-     * @param cfDef
+     *
+     * @param output File to write to.
+     * @param cfDef  CfDef to export attributes from.
      */
-    private void showColumnFamily(StringBuilder sb, CfDef cfDef)
+    private void showColumnFamily(PrintStream output, CfDef cfDef)
     {
-        sb.append("create column family " + CliUtils.escapeSQLString(cfDef.name));
+        output.append("create column family ").append(CliUtils.escapeSQLString(cfDef.name));
 
-        writeAttr(sb, true, "column_type", cfDef.column_type);
-        writeAttr(sb, false, "comparator", normaliseType(cfDef.comparator_type, "org.apache.cassandra.db.marshal"));
+        writeAttr(output, true, "column_type", cfDef.column_type);
+        writeAttr(output, false, "comparator", normaliseType(cfDef.comparator_type, "org.apache.cassandra.db.marshal"));
         if (cfDef.column_type.equals("Super"))
-            writeAttr(sb, false, "subcomparator", normaliseType(cfDef.subcomparator_type, "org.apache.cassandra.db.marshal"));
+            writeAttr(output, false, "subcomparator", normaliseType(cfDef.subcomparator_type, "org.apache.cassandra.db.marshal"));
         if (!StringUtils.isEmpty(cfDef.default_validation_class))
-            writeAttr(sb, false, "default_validation_class",
+            writeAttr(output, false, "default_validation_class",
                         normaliseType(cfDef.default_validation_class, "org.apache.cassandra.db.marshal"));
-        writeAttr(sb, false, "key_validation_class",
+        writeAttr(output, false, "key_validation_class",
                     normaliseType(cfDef.key_validation_class, "org.apache.cassandra.db.marshal"));
-        writeAttr(sb, false, "read_repair_chance", cfDef.read_repair_chance);
-        writeAttr(sb, false, "gc_grace", cfDef.gc_grace_seconds);
-        writeAttr(sb, false, "min_compaction_threshold", cfDef.min_compaction_threshold);
-        writeAttr(sb, false, "max_compaction_threshold", cfDef.max_compaction_threshold);
-        writeAttr(sb, false, "replicate_on_write", cfDef.replicate_on_write);
-        writeAttr(sb, false, "compaction_strategy", cfDef.compaction_strategy);
+
+        writeAttr(output, false, "read_repair_chance", cfDef.read_repair_chance);
+        writeAttr(output, false, "dclocal_read_repair_chance", cfDef.dclocal_read_repair_chance);
+        writeAttr(output, false, "gc_grace", cfDef.gc_grace_seconds);
+        writeAttr(output, false, "min_compaction_threshold", cfDef.min_compaction_threshold);
+        writeAttr(output, false, "max_compaction_threshold", cfDef.max_compaction_threshold);
+        writeAttr(output, false, "replicate_on_write", cfDef.replicate_on_write);
+        writeAttr(output, false, "compaction_strategy", cfDef.compaction_strategy);
+        writeAttr(output, false, "caching", cfDef.caching);
+
+        if (cfDef.isSetBloom_filter_fp_chance())
+            writeAttr(output, false, "bloom_filter_fp_chance", cfDef.bloom_filter_fp_chance);
 
         if (!cfDef.compaction_strategy_options.isEmpty())
         {
@@ -1658,26 +1750,28 @@ public class CliClient
 
             cOptions.append("}");
 
-            writeAttrRaw(sb, false, "compaction_strategy_options", cOptions.toString());
+            writeAttrRaw(output, false, "compaction_strategy_options", cOptions.toString());
         }
 
         if (!StringUtils.isEmpty(cfDef.comment))
-            writeAttr(sb, false, "comment", cfDef.comment);
+            writeAttr(output, false, "comment", cfDef.comment);
 
         if (!cfDef.column_metadata.isEmpty())
         {
-            StringBuilder colSb = new StringBuilder();
-            colSb.append("[");
+            output.append(NEWLINE)
+                  .append(TAB)
+                  .append("and column_metadata = [");
+
             boolean first = true;
             for (ColumnDef colDef : cfDef.column_metadata)
             {
                 if (!first)
-                    colSb.append(",");
+                    output.append(",");
                 first = false;
-                showColumnMeta(colSb, cfDef, colDef);
+                showColumnMeta(output, cfDef, colDef);
             }
-            colSb.append("]");
-            writeAttrRaw(sb, false, "column_metadata", colSb.toString());
+
+            output.append("]");
         }
 
         if (cfDef.compression_options != null && !cfDef.compression_options.isEmpty())
@@ -1700,47 +1794,59 @@ public class CliClient
 
             compOptions.append("}");
 
-            writeAttrRaw(sb, false, "compression_options", compOptions.toString());
+            writeAttrRaw(output, false, "compression_options", compOptions.toString());
         }
 
-        sb.append(";");
-        sb.append(NEWLINE);
-        sb.append(NEWLINE);
+        output.append(";");
+        output.append(NEWLINE);
+        output.append(NEWLINE);
     }
 
     /**
      * Writes the supplied ColumnDef to the StringBuilder as a cli script.
-     * @param sb
-     * @param cfDef
-     * @param colDef
+     *
+     * @param output The File to write to.
+     * @param cfDef  The CfDef as a source for comparator/validator
+     * @param colDef The Column Definition to export
      */
-    private void showColumnMeta(StringBuilder sb, CfDef cfDef, ColumnDef colDef)
+    private void showColumnMeta(PrintStream output, CfDef cfDef, ColumnDef colDef)
     {
-        sb.append(NEWLINE + TAB + TAB + "{");
+        output.append(NEWLINE + TAB + TAB + "{");
 
-        final AbstractType comparator = getFormatType(cfDef.column_type.equals("Super")
+        final AbstractType<?> comparator = getFormatType(cfDef.column_type.equals("Super")
                                                       ? cfDef.subcomparator_type
                                                       : cfDef.comparator_type);
-        sb.append("column_name : '" + CliUtils.escapeSQLString(comparator.getString(colDef.name)) + "'," + NEWLINE);
+        output.append("column_name : '" + CliUtils.escapeSQLString(comparator.getString(colDef.name)) + "'," + NEWLINE);
         String validationClass = normaliseType(colDef.validation_class, "org.apache.cassandra.db.marshal");
-        sb.append(TAB + TAB + "validation_class : " + CliUtils.escapeSQLString(validationClass));
+        output.append(TAB + TAB + "validation_class : " + CliUtils.escapeSQLString(validationClass));
         if (colDef.isSetIndex_name())
         {
-            sb.append("," + NEWLINE);
-            sb.append(TAB + TAB + "index_name : '" + CliUtils.escapeSQLString(colDef.index_name) + "'," + NEWLINE);
-            sb.append(TAB + TAB + "index_type : " + CliUtils.escapeSQLString(Integer.toString(colDef.index_type.getValue())) + "," + NEWLINE);
+            output.append(",").append(NEWLINE)
+                  .append(TAB + TAB + "index_name : '" + CliUtils.escapeSQLString(colDef.index_name) + "'," + NEWLINE)
+                  .append(TAB + TAB + "index_type : " + CliUtils.escapeSQLString(Integer.toString(colDef.index_type.getValue())));
 
             if (colDef.index_options != null)
             {
-                sb.append(TAB + TAB + "index_options : {"+NEWLINE);        
+                output.append(",").append(NEWLINE);
+                output.append(TAB + TAB + "index_options : {" + NEWLINE);
+                int numOpts = colDef.index_options.size();
                 for (Map.Entry<String, String> entry : colDef.index_options.entrySet())
                 {
-                    sb.append(TAB + TAB + TAB + CliUtils.escapeSQLString(entry.getKey()) + ": '" + CliUtils.escapeSQLString(entry.getValue()) + "'," + NEWLINE);
+                    String option = CliUtils.escapeSQLString(entry.getKey());
+                    String optionValue = CliUtils.escapeSQLString(entry.getValue());
+
+                    output.append(TAB + TAB + TAB)
+                          .append("'" + option + "' : '")
+                          .append(optionValue)
+                          .append("'");
+
+                    if (--numOpts > 0)
+                        output.append(",").append(NEWLINE);
                 }
-                sb.append("}");
+                output.append("}");
             }
         }
-        sb.append("}");
+        output.append("}");
     }
 
     private String normaliseType(String path, String expectedPackage)
@@ -1751,59 +1857,59 @@ public class CliClient
         return path;
     }
 
-    private void writeAttr(StringBuilder sb, boolean first, String name, Boolean value)
+    private void writeAttr(PrintStream output, boolean first, String name, Boolean value)
     {
-        writeAttrRaw(sb, first, name, value.toString());
+        writeAttrRaw(output, first, name, value.toString());
     }
-    private void writeAttr(StringBuilder sb, boolean first, String name, Number value)
+    private void writeAttr(PrintStream output, boolean first, String name, Number value)
     {
-        writeAttrRaw(sb, first, name, value.toString());
-    }
-
-    private void writeAttr(StringBuilder sb, boolean first, String name, String value)
-    {
-        writeAttrRaw(sb, first, name, "'" + CliUtils.escapeSQLString(value) + "'");
+        writeAttrRaw(output, first, name, value.toString());
     }
 
-    private void writeAttrRaw(StringBuilder sb, boolean first, String name, String value)
+    private void writeAttr(PrintStream output, boolean first, String name, String value)
     {
-        sb.append(NEWLINE + TAB);
-        sb.append(first ? "with " : "and ");
-        sb.append(name + " = ");
-        sb.append(value);
+        writeAttrRaw(output, first, name, "'" + CliUtils.escapeSQLString(value) + "'");
+    }
+
+    private void writeAttrRaw(PrintStream output, boolean first, String name, String value)
+    {
+        output.append(NEWLINE).append(TAB);
+        output.append(first ? "with " : "and ");
+        output.append(name).append(" = ");
+        output.append(value);
     }
     /**
      * Returns true if this.keySpace is set, false otherwise
      * @return boolean
      */
-    private boolean hasKeySpace() 
+    private boolean hasKeySpace()
     {
-    	if (keySpace == null)
+        if (keySpace == null)
         {
             sessionState.out.println("Not authenticated to a working keyspace.");
             return false;
         }
-        
+
         return true;
     }
-    
-    public String getKeySpace() 
+
+    public String getKeySpace()
     {
         return keySpace == null ? "unknown" : keySpace;
     }
-    
-    public void setKeySpace(String keySpace) throws NotFoundException, InvalidRequestException, TException 
+
+    public void setKeySpace(String keySpace) throws NotFoundException, InvalidRequestException, TException
     {
         this.keySpace = keySpace;
         // We do nothing with the return value, but it hits a cache and the tab-completer.
         getKSMetaData(keySpace);
     }
-    
-    public String getUsername() 
+
+    public String getUsername()
     {
         return username == null ? "default" : username;
     }
-    
+
     public void setUsername(String username)
     {
         this.username = username;
@@ -1826,44 +1932,45 @@ public class CliClient
             username  = statement.getChild(1).getText();
             password  = statement.getChild(2).getText();
         }
-        
+
         if (keySpaceName == null)
         {
             sessionState.out.println("Keyspace argument required");
             return;
         }
-        
-        try 
+
+        try
         {
-        	AuthenticationRequest authRequest;
-        	Map<String, String> credentials = new HashMap<String, String>();
+            AuthenticationRequest authRequest;
+            Map<String, String> credentials = new HashMap<String, String>();
 
             keySpaceName = CliCompiler.getKeySpace(keySpaceName, thriftClient.describe_keyspaces());
 
             thriftClient.set_keyspace(keySpaceName);
 
-        	if (username != null && password != null) 
-        	{
-        	    /* remove quotes */
-        	    password = password.replace("\'", "");
-        	    credentials.put(IAuthenticator.USERNAME_KEY, username);
+            if (username != null && password != null)
+            {
+                /* remove quotes */
+                password = password.replace("\'", "");
+                credentials.put(IAuthenticator.USERNAME_KEY, username);
                 credentials.put(IAuthenticator.PASSWORD_KEY, password);
                 authRequest = new AuthenticationRequest(credentials);
                 thriftClient.login(authRequest);
-        	}
-        	
+            }
+
             keySpace = keySpaceName;
             this.username = username != null ? username : "default";
-            
+
+            keyspacesMap.remove(keySpace);
             CliMain.updateCompletor(CliUtils.getCfNamesByKeySpace(getKSMetaData(keySpace)));
             sessionState.out.println("Authenticated to keyspace: " + keySpace);
-        } 
-        catch (AuthenticationException e) 
+        }
+        catch (AuthenticationException e)
         {
             sessionState.err.println("Exception during authentication to the cassandra node: " +
-            		                 "verify keyspace exists, and you are using correct credentials.");
-        } 
-        catch (AuthorizationException e) 
+                                     "verify keyspace exists, and you are using correct credentials.");
+        }
+        catch (AuthorizationException e)
         {
             sessionState.err.println("You are not authorized to use keyspace: " + keySpaceName);
         }
@@ -1874,8 +1981,8 @@ public class CliClient
         catch (NotFoundException e)
         {
             sessionState.err.println(keySpaceName + " does not exist.");
-        } 
-        catch (TException e) 
+        }
+        catch (TException e)
         {
             if (sessionState.debug)
                 e.printStackTrace(sessionState.err);
@@ -1914,15 +2021,15 @@ public class CliClient
             // compaction manager information
             if (compactionManagerMBean != null)
             {
-                for (CompactionInfo info : compactionManagerMBean.getCompactions())
+                for (Map<String, String> info : compactionManagerMBean.getCompactions())
                 {
                     // if ongoing compaction type is index build
-                    if (info.getTaskType() != OperationType.INDEX_BUILD)
+                    if (info.get("taskType").equals(OperationType.INDEX_BUILD.toString()))
                         continue;
                     sessionState.out.printf("%nCurrently building index %s, completed %d of %d bytes.%n",
-                                            info.getColumnFamily(),
-                                            info.getBytesComplete(),
-                                            info.getTotalBytes());
+                                            info.get("columnfamily"),
+                                            info.get("bytesComplete"),
+                                            info.get("totalBytes"));
                 }
             }
 
@@ -1965,7 +2072,10 @@ public class CliClient
         sessionState.out.printf("      GC grace seconds: %s%n", cf_def.gc_grace_seconds);
         sessionState.out.printf("      Compaction min/max thresholds: %s/%s%n", cf_def.min_compaction_threshold, cf_def.max_compaction_threshold);
         sessionState.out.printf("      Read repair chance: %s%n", cf_def.read_repair_chance);
+        sessionState.out.printf("      DC Local Read repair chance: %s%n", cf_def.dclocal_read_repair_chance);
         sessionState.out.printf("      Replicate on write: %s%n", cf_def.replicate_on_write);
+        sessionState.out.printf("      Caching: %s%n", cf_def.caching);
+        sessionState.out.printf("      Bloom Filter FP chance: %s%n", cf_def.isSetBloom_filter_fp_chance() ? cf_def.bloom_filter_fp_chance : "default");
 
         // if we have connection to the cfMBean established
         if (cfMBean != null)
@@ -1978,7 +2088,7 @@ public class CliClient
 
             String compareWith = isSuper ? cf_def.subcomparator_type
                     : cf_def.comparator_type;
-            AbstractType columnNameValidator = getFormatType(compareWith);
+            AbstractType<?> columnNameValidator = getFormatType(compareWith);
 
             sessionState.out.println(leftSpace + "Column Metadata:");
             for (ColumnDef columnDef : cf_def.getColumn_metadata())
@@ -2005,6 +2115,9 @@ public class CliClient
 
                 if (columnDef.isSetIndex_type())
                     sessionState.out.println(columnLeftSpace + "Index Type: " + columnDef.getIndex_type().name());
+
+                if (columnDef.isSetIndex_options())
+                    sessionState.out.println(columnLeftSpace + "Index Options: " + columnDef.getIndex_options());
             }
         }
 
@@ -2026,14 +2139,15 @@ public class CliClient
     }
 
     // DESCRIBE KEYSPACE (<keyspace> | <column_family>)?
-    private void executeDescribe(Tree statement) throws TException, InvalidRequestException
+    private void executeDescribe(Tree statement) throws TException, InvalidRequestException, NotFoundException
     {
         if (!CliMain.isConnected())
             return;
 
         int argCount = statement.getChildCount();
-
-        KsDef currentKeySpace = keyspacesMap.get(keySpace);
+        
+        keyspacesMap.remove(keySpace);
+        KsDef currentKeySpace = getKSMetaData(keySpace);
 
         if (argCount > 1) // in case somebody changes Cli grammar
             throw new RuntimeException("`describe` command take maximum one argument. See `help describe;`");
@@ -2125,12 +2239,12 @@ public class CliClient
         int portNumber = Integer.parseInt(statement.getChild(1).getText());
 
         StringBuilder hostName = new StringBuilder();
-        int idCount = idList.getChildCount(); 
+        int idCount = idList.getChildCount();
         for (int idx = 0; idx < idCount; idx++)
         {
             hostName.append(idList.getChild(idx).getText());
         }
-        
+
         // disconnect current connection, if any.
         // This is a no-op, if you aren't currently connected.
         CliMain.disconnect();
@@ -2152,13 +2266,13 @@ public class CliClient
     /**
      * To get Column Family Definition object from specified keyspace
      * @param keySpaceName key space name to search for specific column family
-     * @param columnFamilyName column family name 
+     * @param columnFamilyName column family name
      * @return CfDef - Column family definition object
      */
     private CfDef getCfDef(String keySpaceName, String columnFamilyName)
     {
         KsDef keySpaceDefinition = keyspacesMap.get(keySpaceName);
-        
+
         for (CfDef columnFamilyDef : keySpaceDefinition.cf_defs)
         {
             if (columnFamilyDef.name.equals(columnFamilyName))
@@ -2193,24 +2307,24 @@ public class CliClient
 
     /**
      * Used to parse meta tree and compile meta attributes into List<ColumnDef>
-     * @param cfDef - column family definition 
+     * @param cfDef - column family definition
      * @param meta (Tree representing Array of the hashes with metadata attributes)
      * @return List<ColumnDef> List of the ColumnDef's
-     * 
+     *
      * meta is in following format - ^(ARRAY ^(HASH ^(PAIR .. ..) ^(PAIR .. ..)) ^(HASH ...))
      */
     private List<ColumnDef> getCFColumnMetaFromTree(CfDef cfDef, Tree meta)
     {
         // this list will be returned
         List<ColumnDef> columnDefinitions = new ArrayList<ColumnDef>();
-        
+
         // each child node is a ^(HASH ...)
         for (int i = 0; i < meta.getChildCount(); i++)
         {
             Tree metaHash = meta.getChild(i);
 
             ColumnDef columnDefinition = new ColumnDef();
-            
+
             // each child node is ^(PAIR $key $value)
             for (int j = 0; j < metaHash.getChildCount(); j++)
             {
@@ -2242,11 +2356,15 @@ public class CliClient
                 }
                 else if (metaKey.equals("index_name"))
                 {
-                    columnDefinition.setIndex_name(metaVal);    
+                    columnDefinition.setIndex_name(metaVal);
+                }
+                else
+                {
+                    throw new RuntimeException("Unsupported column_metadata pair given => " + metaKey + ": " + metaVal);
                 }
             }
 
-            // validating columnDef structure, 'name' and 'validation_class' must be set 
+            // validating columnDef structure, 'name' and 'validation_class' must be set
             try
             {
                 columnDefinition.validate();
@@ -2264,7 +2382,7 @@ public class CliClient
 
     /**
      * Getting IndexType object from indexType string
-     * @param indexTypeAsString - string return by parser corresponding to IndexType 
+     * @param indexTypeAsString - string return by parser corresponding to IndexType
      * @return IndexType - an IndexType object
      */
     private IndexType getIndexTypeFromString(String indexTypeAsString)
@@ -2302,7 +2420,7 @@ public class CliClient
      * @param comparator - comparator used to convert object
      * @return byte[] - object in the byte array representation
      */
-    private ByteBuffer getBytesAccordingToType(String object, AbstractType comparator)
+    private ByteBuffer getBytesAccordingToType(String object, AbstractType<?> comparator)
     {
         if (comparator == null) // default comparator is BytesType
             comparator = BytesType.instance;
@@ -2316,14 +2434,14 @@ public class CliClient
             throw new RuntimeException(e);
         }
     }
-    
+
     /**
      * Converts column name into byte[] according to comparator type
      * @param column - column name from parser
      * @param columnFamily - column family name from parser
      * @return ByteBuffer - bytes into which column name was converted according to comparator type
      */
-    private ByteBuffer columnNameAsBytes(String column, String columnFamily) 
+    private ByteBuffer columnNameAsBytes(String column, String columnFamily)
     {
         CfDef columnFamilyDef = getCfDef(columnFamily);
         return columnNameAsBytes(column, columnFamilyDef);
@@ -2334,7 +2452,7 @@ public class CliClient
      * @param columnFamilyDef - column family from parser
      * @return ByteBuffer bytes - into which column name was converted according to comparator type
      */
-    private ByteBuffer columnNameAsBytes(String column, CfDef columnFamilyDef) 
+    private ByteBuffer columnNameAsBytes(String column, CfDef columnFamilyDef)
     {
         String comparatorClass = columnFamilyDef.comparator_type;
         return getBytesAccordingToType(column, getFormatType(comparatorClass));
@@ -2380,7 +2498,7 @@ public class CliClient
      * @param columnFamilyDef - column family from parser
      * @return ByteBuffer bytes - into which column name was converted according to comparator type
      */
-    private ByteBuffer subColumnNameAsBytes(String superColumn, CfDef columnFamilyDef) 
+    private ByteBuffer subColumnNameAsBytes(String superColumn, CfDef columnFamilyDef)
     {
         String comparatorClass = columnFamilyDef.subcomparator_type;
 
@@ -2414,7 +2532,7 @@ public class CliClient
     private ByteBuffer columnValueAsBytes(ByteBuffer columnName, String columnFamilyName, String columnValue)
     {
         CfDef columnFamilyDef = getCfDef(columnFamilyName);
-        AbstractType defaultValidator = getFormatType(columnFamilyDef.default_validation_class);
+        AbstractType<?> defaultValidator = getFormatType(columnFamilyDef.default_validation_class);
 
         for (ColumnDef columnDefinition : columnFamilyDef.getColumn_metadata())
         {
@@ -2443,10 +2561,10 @@ public class CliClient
      * @param columnNameInBytes - column name as byte array
      * @return AbstractType - validator for column value
      */
-    private AbstractType getValidatorForValue(CfDef ColumnFamilyDef, byte[] columnNameInBytes)
+    private AbstractType<?> getValidatorForValue(CfDef ColumnFamilyDef, byte[] columnNameInBytes)
     {
         String defaultValidator = ColumnFamilyDef.default_validation_class;
-        
+
         for (ColumnDef columnDefinition : ColumnFamilyDef.getColumn_metadata())
         {
             byte[] nameInBytes = columnDefinition.getName();
@@ -2457,7 +2575,7 @@ public class CliClient
             }
         }
 
-        if (defaultValidator != null && !defaultValidator.isEmpty()) 
+        if (defaultValidator != null && !defaultValidator.isEmpty())
         {
             return getFormatType(defaultValidator);
         }
@@ -2496,7 +2614,7 @@ public class CliClient
             // current $value
             String val = CliUtils.unescapeSQLString(optionPair.getChild(1).getText());
 
-            strategyOptions.put(key, val);           
+            strategyOptions.put(key, val);
         }
 
         return strategyOptions;
@@ -2506,15 +2624,15 @@ public class CliClient
      * Used to convert value (function argument, string) into byte[]
      * calls convertValueByFunction method with "withUpdate" set to false
      * @param functionCall - tree representing function call ^(FUNCTION_CALL function_name value)
-     * @param columnFamily - column family definition (CfDef) 
+     * @param columnFamily - column family definition (CfDef)
      * @param columnName   - also updates column family metadata for given column
-     * @return byte[] - string value as byte[] 
+     * @return byte[] - string value as byte[]
      */
     private ByteBuffer convertValueByFunction(Tree functionCall, CfDef columnFamily, ByteBuffer columnName)
     {
         return convertValueByFunction(functionCall, columnFamily, columnName, false);
     }
-    
+
     /**
      * Used to convert value (function argument, string) into byte[]
      * @param functionCall - tree representing function call ^(FUNCTION_CALL function_name value)
@@ -2528,7 +2646,7 @@ public class CliClient
         String functionName = functionCall.getChild(0).getText();
         Tree argumentTree = functionCall.getChild(1);
         String functionArg  = (argumentTree == null) ? "" : CliUtils.unescapeSQLString(argumentTree.getText());
-        AbstractType validator = getTypeByFunction(functionName);
+        AbstractType<?> validator = getTypeByFunction(functionName);
 
         try
         {
@@ -2578,7 +2696,7 @@ public class CliClient
      * @param functionName - name of the function e.g. utf8, integer, long etc.
      * @return AbstractType type corresponding to the function name
      */
-    public static AbstractType getTypeByFunction(String functionName)
+    public static AbstractType<?> getTypeByFunction(String functionName)
     {
         Function function;
 
@@ -2656,9 +2774,9 @@ public class CliClient
     private void printSliceList(CfDef columnFamilyDef, List<KeySlice> slices)
             throws NotFoundException, TException, IllegalAccessException, InstantiationException, NoSuchFieldException, CharacterCodingException
     {
-        AbstractType validator;
+        AbstractType<?> validator;
         String columnFamilyName = columnFamilyDef.getName();
-        AbstractType keyComparator = getKeyComparatorForCF(columnFamilyName);
+        AbstractType<?> keyComparator = getKeyComparatorForCF(columnFamilyName);
 
         for (KeySlice ks : slices)
         {
@@ -2759,9 +2877,9 @@ public class CliClient
         return getBytesAccordingToType(key, getKeyComparatorForCF(columnFamily));
     }
 
-    private AbstractType getKeyComparatorForCF(String columnFamily)
+    private AbstractType<?> getKeyComparatorForCF(String columnFamily)
     {
-        AbstractType keyComparator = cfKeysComparators.get(columnFamily);
+        AbstractType<?> keyComparator = cfKeysComparators.get(columnFamily);
 
         if (keyComparator == null)
         {
@@ -2842,5 +2960,167 @@ public class CliClient
     private void elapsedTime(long startTime)
     {
         sessionState.out.println("Elapsed time: " + (System.currentTimeMillis() - startTime) + " msec(s).");
+    }
+    
+    class CfAssumptions
+    {
+        //Map<KeySpace, Map<ColumnFamily, Map<Property, Value>>>
+        private Map<String, Map<String, Map<String, String>>> assumptions;
+        private boolean assumptionsChanged;
+        private File assumptionDirectory;
+        
+        public CfAssumptions()
+        {
+            assumptions = new HashMap<String, Map<String, Map<String, String>>>();
+            assumptionsChanged = false;
+            assumptionDirectory = new File(System.getProperty("user.home"), ".cassandra-cli");
+            assumptionDirectory.mkdirs();
+        }
+        
+        public void addAssumption(String keyspace, String columnFamily, String property, String value)
+        {
+            Map<String, Map<String, String>> ksAssumes = assumptions.get(keyspace);
+            if (ksAssumes == null)
+            {
+                ksAssumes = new HashMap<String, Map<String, String>>();
+                assumptions.put(keyspace, ksAssumes);
+            }
+            
+            Map<String, String> cfAssumes = ksAssumes.get(columnFamily);
+            if (cfAssumes == null)
+            {
+                cfAssumes = new HashMap<String, String>();
+                ksAssumes.put(columnFamily, cfAssumes);
+            }
+            
+            cfAssumes.put(property, value);
+            assumptionsChanged = true;
+        }
+        
+        public void replayAssumptions(String keyspace)
+        {
+            if (!CliMain.isConnected() || !hasKeySpace())
+                return;
+            
+            Map<String, Map<String, String>> cfAssumes = assumptions.get(keyspace);
+            if (cfAssumes != null)
+            {
+                for (Map.Entry<String, Map<String, String>> cfEntry : cfAssumes.entrySet())
+                {
+                    String columnFamily = cfEntry.getKey();
+                    Map<String, String> props = cfEntry.getValue();
+                    
+                    for (Map.Entry<String, String> propEntry : props.entrySet())
+                    {
+                        applyAssumption(columnFamily, propEntry.getKey(), propEntry.getValue());
+                    }
+                }
+            }
+        }
+        
+        private void readAssumptions()
+        {
+            File assumptionFile = new File(assumptionDirectory, "assumptions.json");
+            if (assumptionFile.isFile())
+            {
+                try
+                {
+                    JsonFactory f = new JsonFactory();
+                    JsonParser p = f.createJsonParser(assumptionFile);
+                    JsonToken token = p.nextToken();
+                    while (token != JsonToken.END_OBJECT)
+                    {
+                        if (token == JsonToken.FIELD_NAME)
+                        {
+                            String keyspace = p.getText();
+                            Map<String, Map<String, String>> ksAssumes = assumptions.get(keyspace);
+                            if (ksAssumes == null)
+                            {
+                                ksAssumes = new HashMap<String, Map<String, String>>();
+                                assumptions.put(keyspace,  ksAssumes);
+                            }
+                            token = p.nextToken();
+                            while (token != JsonToken.END_ARRAY)
+                            {
+                                if (token == JsonToken.FIELD_NAME)
+                                {
+                                    String columnFamily = p.getText();
+                                    Map<String, String> cfAssumes = ksAssumes.get(columnFamily);
+                                    if (cfAssumes == null)
+                                    {
+                                        cfAssumes = new HashMap<String, String>();
+                                        ksAssumes.put(columnFamily, cfAssumes);
+                                    }
+                                    
+                                    token = p.nextToken();
+                                    while (token != JsonToken.END_ARRAY)
+                                    {
+                                        if (token == JsonToken.FIELD_NAME)
+                                        {
+                                            String prop = p.getText();
+                                            p.nextToken();
+                                            String value = p.getText();
+                                            cfAssumes.put(prop, value);
+                                        }
+                                        
+                                        token = p.nextToken();
+                                    }
+                                }
+                                token = p.nextToken();
+                            }
+                        }
+                        token = p.nextToken();
+                    }
+                    sessionState.out.println("Column Family assumptions read from " + assumptionFile);
+                }
+                catch (Exception e)
+                {
+                    sessionState.err.println("Failed reading " + assumptionFile + " file");
+                }
+            }
+        }
+        
+        private void writeAssumptions()
+        {
+            if (assumptionsChanged)
+            {
+                File assumptionFile = new File(assumptionDirectory, "assumptions.json");
+                try
+                {
+                    JsonFactory f = new JsonFactory();
+                    JsonGenerator g = f.createJsonGenerator(assumptionFile, JsonEncoding.UTF8);
+                    g.useDefaultPrettyPrinter();
+                    g.writeStartObject();
+                    for (Map.Entry<String, Map<String, Map<String, String>>> ksEntry : assumptions.entrySet())
+                    {
+                        g.writeFieldName(ksEntry.getKey());
+                        g.writeStartArray();
+                        for (Map.Entry<String, Map<String, String>> cfEntry : ksEntry.getValue().entrySet())
+                        {
+                            g.writeStartObject();
+                            g.writeFieldName(cfEntry.getKey());
+                            g.writeStartArray();
+                            for (Map.Entry<String, String> asEntry : cfEntry.getValue().entrySet())
+                            {
+                                g.writeStartObject();
+                                g.writeStringField(asEntry.getKey(), asEntry.getValue());
+                                g.writeEndObject();
+                            }
+                            g.writeEndArray();
+                            g.writeEndObject();
+                        }
+                        g.writeEndArray();
+                    }
+                    g.writeEndObject();
+                    g.close();
+                    sessionState.out.println("Column Family assumptions written to " + assumptionFile);
+                    assumptionsChanged = false;
+                }
+                catch (Exception e)
+                {
+                    sessionState.err.println("Failed writing " + assumptionFile + " file");
+                }
+            }
+        }
     }
 }

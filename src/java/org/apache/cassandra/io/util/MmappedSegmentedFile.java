@@ -1,6 +1,4 @@
-package org.apache.cassandra.io.util;
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,19 +6,19 @@ package org.apache.cassandra.io.util;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+package org.apache.cassandra.io.util;
 
-
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.File;
 import java.io.IOError;
 import java.io.IOException;
@@ -81,7 +79,7 @@ public class MmappedSegmentedFile extends SegmentedFile
         if (segment.right != null)
         {
             // segment is mmap'd
-            return new MappedFileDataInput(segment.right, path, (int) (position - segment.left));
+            return new MappedFileDataInput(segment.right, path, segment.left, (int) (position - segment.left));
         }
 
         // not mmap'd: open a braf covering the segment
@@ -151,7 +149,7 @@ public class MmappedSegmentedFile extends SegmentedFile
     static class Builder extends SegmentedFile.Builder
     {
         // planned segment boundaries
-        private final List<Long> boundaries;
+        private List<Long> boundaries;
 
         // offset of the open segment (first segment begins at 0).
         private long currentStart = 0;
@@ -197,7 +195,8 @@ public class MmappedSegmentedFile extends SegmentedFile
         {
             long length = new File(path).length();
             // add a sentinel value == length
-            boundaries.add(Long.valueOf(length));
+            if (length != boundaries.get(boundaries.size() - 1))
+                boundaries.add(length);
             // create the segments
             return new MmappedSegmentedFile(path, length, createSegments(path));
         }
@@ -229,6 +228,28 @@ public class MmappedSegmentedFile extends SegmentedFile
                 FileUtils.closeQuietly(raf);
             }
             return segments;
+        }
+
+        @Override
+        public void serializeBounds(DataOutput dos) throws IOException
+        {
+            super.serializeBounds(dos);
+            dos.writeInt(boundaries.size());
+            for (long position: boundaries)
+                dos.writeLong(position);
+        }
+
+        @Override
+        public void deserializeBounds(DataInput dis) throws IOException
+        {
+            super.deserializeBounds(dis);
+            List<Long> temp = new ArrayList<Long>();
+
+            int size = dis.readInt();
+            for (int i = 0; i < size; i++)
+                temp.add(dis.readLong());
+
+            boundaries = temp;
         }
     }
 }

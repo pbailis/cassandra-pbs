@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -6,252 +6,331 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * <p/>
- * http://www.apache.org/licenses/LICENSE-2.0
- * <p/>
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.service;
 
 import java.io.*;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.util.*;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.UUID;
 
-import com.google.common.collect.Iterables;
-import com.google.common.collect.MapMaker;
-import org.apache.cassandra.config.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.concurrent.Stage;
 import org.apache.cassandra.concurrent.StageManager;
+import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.ConfigurationException;
-import org.apache.cassandra.db.Column;
-import org.apache.cassandra.db.IColumn;
-import org.apache.cassandra.db.marshal.TimeUUIDType;
-import org.apache.cassandra.db.migration.Migration;
+import org.apache.cassandra.config.KSMetaData;
+import org.apache.cassandra.config.Schema;
+import org.apache.cassandra.db.*;
+import org.apache.cassandra.db.filter.QueryFilter;
+import org.apache.cassandra.db.filter.QueryPath;
 import org.apache.cassandra.gms.*;
-import org.apache.cassandra.io.util.FastByteArrayInputStream;
-import org.apache.cassandra.io.util.FastByteArrayOutputStream;
-import org.apache.cassandra.net.Message;
+import org.apache.cassandra.io.IVersionedSerializer;
+import org.apache.cassandra.net.MessageOut;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.FBUtilities;
+import org.apache.cassandra.utils.UUIDGen;
 
 public class MigrationManager implements IEndpointStateChangeSubscriber
 {
     private static final Logger logger = LoggerFactory.getLogger(MigrationManager.class);
 
-    // avoids re-pushing migrations that we're waiting on target to apply already
-    private static Map<InetAddress,UUID> lastPushed = new MapMaker().expiration(1, TimeUnit.MINUTES).makeMap();
-    
-    private static UUID highestKnown;
+    // try that many times to send migration request to the node before giving up
+    static final int MIGRATION_REQUEST_RETRIES = 3;
+    private static final ByteBuffer LAST_MIGRATION_KEY = ByteBufferUtil.bytes("Last Migration");
 
-    public void onJoin(InetAddress endpoint, EndpointState epState) { 
-        VersionedValue value = epState.getApplicationState(ApplicationState.SCHEMA);
-        if (value != null)
-        {
-            UUID theirVersion = UUID.fromString(value.value);
-            rectify(theirVersion, endpoint);
-        }
-    }
+    public void onJoin(InetAddress endpoint, EndpointState epState)
+    {}
 
     public void onChange(InetAddress endpoint, ApplicationState state, VersionedValue value)
     {
-        if (state != ApplicationState.SCHEMA)
+        if (state != ApplicationState.SCHEMA || endpoint.equals(FBUtilities.getBroadcastAddress()))
             return;
-        UUID theirVersion = UUID.fromString(value.value);
-        rectify(theirVersion, endpoint);
+
+        rectifySchema(UUID.fromString(value.value), endpoint);
     }
 
-    /** gets called after a this node joins a cluster */
     public void onAlive(InetAddress endpoint, EndpointState state)
-    { 
+    {
         VersionedValue value = state.getApplicationState(ApplicationState.SCHEMA);
+
         if (value != null)
-        {
-            UUID theirVersion = UUID.fromString(value.value);
-            rectify(theirVersion, endpoint);
-        }
+            rectifySchema(UUID.fromString(value.value), endpoint);
     }
 
-    public void onDead(InetAddress endpoint, EndpointState state) { }
+    public void onDead(InetAddress endpoint, EndpointState state)
+    {}
 
-    public void onRestart(InetAddress endpoint, EndpointState state) { }
+    public void onRestart(InetAddress endpoint, EndpointState state)
+    {}
 
-    public void onRemove(InetAddress endpoint) { }
-    
-    /** 
-     * will either push or pull an updating depending on who is behind.
-     * fat clients should never push their schemas (since they have no local storage).
-     */
-    public static void rectify(UUID theirVersion, InetAddress endpoint)
+    public void onRemove(InetAddress endpoint)
+    {}
+
+    private static void rectifySchema(UUID theirVersion, final InetAddress endpoint)
     {
-        updateHighestKnown(theirVersion);
-        UUID myVersion = Schema.instance.getVersion();
-        if (theirVersion.timestamp() < myVersion.timestamp()
-            && !StorageService.instance.isClientMode())
-        {
-            if (lastPushed.get(endpoint) == null || theirVersion.timestamp() >= lastPushed.get(endpoint).timestamp())
-            {
-                logger.debug("Schema on {} is old. Sending updates since {}", endpoint, theirVersion);
-                Collection<IColumn> migrations = Migration.getLocalMigrations(theirVersion, myVersion);
-                pushMigrations(endpoint, migrations);
-                lastPushed.put(endpoint, TimeUUIDType.instance.compose(Iterables.getLast(migrations).name()));
-            }
-            else
-            {
-                logger.debug("Waiting for {} to process migrations up to {} before sending more",
-                             endpoint, lastPushed.get(endpoint));
-            }
-        }
-    }
-    
-    private static void updateHighestKnown(UUID theirversion)
-    {
-        if (highestKnown == null || theirversion.timestamp() > highestKnown.timestamp())
-            highestKnown = theirversion;
+        // Can't request migrations from nodes with versions younger than 1.1
+        if (Gossiper.instance.getVersion(endpoint) < MessagingService.VERSION_11)
+            return;
+
+        if (Schema.instance.getVersion().equals(theirVersion))
+            return;
+
+        /**
+         * if versions differ this node sends request with local migration list to the endpoint
+         * and expecting to receive a list of migrations to apply locally.
+         *
+         * Do not de-ref the future because that causes distributed deadlock (CASSANDRA-3832) because we are
+         * running in the gossip stage.
+         */
+        StageManager.getStage(Stage.MIGRATION).submit(new MigrationTask(endpoint));
     }
 
     public static boolean isReadyForBootstrap()
     {
-        return highestKnown.compareTo(Schema.instance.getVersion()) == 0;
+        return StageManager.getStage(Stage.MIGRATION).getActiveCount() == 0;
     }
 
-    private static void pushMigrations(InetAddress endpoint, Collection<IColumn> migrations)
+    public static void announceNewKeyspace(KSMetaData ksm) throws ConfigurationException
     {
-        try
-        {
-            Message msg = makeMigrationMessage(migrations, Gossiper.instance.getVersion(endpoint));
-            MessagingService.instance().sendOneWay(msg, endpoint);
-        }
-        catch (IOException ex)
-        {
-            throw new IOError(ex);
-        }
+        ksm.validate();
+
+        if (Schema.instance.getTableDefinition(ksm.name) != null)
+            throw new ConfigurationException(String.format("Cannot add already existing keyspace '%s'.", ksm.name));
+
+        announce(ksm.toSchema(System.nanoTime()));
     }
 
-    /** actively announce a new version to active hosts via rpc */
-    public static void announce(IColumn column)
+    public static void announceNewColumnFamily(CFMetaData cfm) throws ConfigurationException
     {
+        cfm.validate();
 
-        Collection<IColumn> migrations = Collections.singleton(column);
+        KSMetaData ksm = Schema.instance.getTableDefinition(cfm.ksName);
+        if (ksm == null)
+            throw new ConfigurationException(String.format("Cannot add column family '%s' to non existing keyspace '%s'.", cfm.cfName, cfm.ksName));
+        else if (ksm.cfMetaData().containsKey(cfm.cfName))
+            throw new ConfigurationException(String.format("Cannot add already existing column family '%s' to keyspace '%s'.", cfm.cfName, cfm.ksName));
+
+        announce(cfm.toSchema(System.nanoTime()));
+    }
+
+    public static void announceKeyspaceUpdate(KSMetaData ksm) throws ConfigurationException
+    {
+        ksm.validate();
+
+        KSMetaData oldKsm = Schema.instance.getKSMetaData(ksm.name);
+        if (oldKsm == null)
+            throw new ConfigurationException(String.format("Cannot update non existing keyspace '%s'.", ksm.name));
+
+        announce(oldKsm.toSchemaUpdate(ksm, System.nanoTime()));
+    }
+
+    public static void announceColumnFamilyUpdate(CFMetaData cfm) throws ConfigurationException
+    {
+        cfm.validate();
+
+        CFMetaData oldCfm = Schema.instance.getCFMetaData(cfm.ksName, cfm.cfName);
+        if (oldCfm == null)
+            throw new ConfigurationException(String.format("Cannot update non existing column family '%s' in keyspace '%s'.", cfm.cfName, cfm.ksName));
+
+        announce(oldCfm.toSchemaUpdate(cfm, System.nanoTime()));
+    }
+
+    public static void announceKeyspaceDrop(String ksName) throws ConfigurationException
+    {
+        KSMetaData oldKsm = Schema.instance.getKSMetaData(ksName);
+        if (oldKsm == null)
+            throw new ConfigurationException(String.format("Cannot drop non existing keyspace '%s'.", ksName));
+
+        announce(oldKsm.dropFromSchema(System.nanoTime()));
+    }
+
+    public static void announceColumnFamilyDrop(String ksName, String cfName) throws ConfigurationException
+    {
+        CFMetaData oldCfm = Schema.instance.getCFMetaData(ksName, cfName);
+        if (oldCfm == null)
+            throw new ConfigurationException(String.format("Cannot drop non existing column family '%s' in keyspace '%s'.", cfName, ksName));
+
+        announce(oldCfm.dropFromSchema(System.nanoTime()));
+    }
+
+    /**
+     * actively announce a new version to active hosts via rpc
+     * @param schema The schema mutation to be applied
+     */
+    private static void announce(RowMutation schema)
+    {
+        FBUtilities.waitOnFuture(announce(Collections.singletonList(schema)));
+    }
+
+    private static void pushSchemaMutation(InetAddress endpoint, Collection<RowMutation> schema)
+    {
+        MessageOut<Collection<RowMutation>> msg = new MessageOut<Collection<RowMutation>>(MessagingService.Verb.DEFINITIONS_UPDATE,
+                                                                                          schema,
+                                                                                          MigrationsSerializer.instance);
+        MessagingService.instance().sendOneWay(msg, endpoint);
+    }
+
+    // Returns a future on the local application of the schema
+    private static Future<?> announce(final Collection<RowMutation> schema)
+    {
+        Future<?> f = StageManager.getStage(Stage.MIGRATION).submit(new Callable<Object>()
+        {
+            public Object call() throws Exception
+            {
+                DefsTable.mergeSchema(schema);
+                return null;
+            }
+        });
+
         for (InetAddress endpoint : Gossiper.instance.getLiveMembers())
-            pushMigrations(endpoint, migrations);
+        {
+            if (endpoint.equals(FBUtilities.getBroadcastAddress()))
+                continue; // we've delt with localhost already
+
+            // don't send migrations to the nodes with the versions older than < 1.1
+            if (Gossiper.instance.getVersion(endpoint) < MessagingService.VERSION_11)
+                continue;
+
+            pushSchemaMutation(endpoint, schema);
+        }
+        return f;
     }
 
-    /** announce my version passively over gossip **/
+    /**
+     * Announce my version passively over gossip.
+     * Used to notify nodes as they arrive in the cluster.
+     *
+     * @param version The schema version to announce
+     */
     public static void passiveAnnounce(UUID version)
     {
-        // this is for notifying nodes as they arrive in the cluster.
+        assert Gossiper.instance.isEnabled();
         Gossiper.instance.addLocalApplicationState(ApplicationState.SCHEMA, StorageService.instance.valueFactory.migration(version));
         logger.debug("Gossiping my schema version " + version);
     }
 
     /**
-     * gets called during startup if we notice a mismatch between the current migration version and the one saved. This
-     * can only happen as a result of the commit log recovering schema updates, which overwrites lastVersionId.
-     * 
-     * This method silently eats IOExceptions thrown by Migration.apply() as a result of applying a migration out of
-     * order.
+     * Clear all locally stored schema information and reset schema to initial state.
+     * Called by user (via JMX) who wants to get rid of schema disagreement.
+     *
+     * @throws IOException if schema tables truncation fails
      */
-    public static void applyMigrations(final UUID from, final UUID to) throws IOException
+    public static void resetLocalSchema() throws IOException
     {
-        List<Future<?>> updates = new ArrayList<Future<?>>();
-        Collection<IColumn> migrations = Migration.getLocalMigrations(from, to);
-        for (IColumn col : migrations)
+        logger.info("Starting local schema reset...");
+
+        try
         {
-            // assuming MessagingService.version_ is a bit of a risk, but you're playing with fire if you purposefully
-            // take down a node to upgrade it during the middle of a schema update.
-            final Migration migration = Migration.deserialize(col.value(), MessagingService.version_);
-            Future<?> update = StageManager.getStage(Stage.MIGRATION).submit(new Runnable()
+            if (logger.isDebugEnabled())
+                logger.debug("Truncating schema tables...");
+
+            // truncate schema tables
+            FBUtilities.waitOnFutures(new ArrayList<Future<?>>(3)
+            {{
+                SystemTable.schemaCFS(SystemTable.SCHEMA_KEYSPACES_CF).truncate();
+                SystemTable.schemaCFS(SystemTable.SCHEMA_COLUMNFAMILIES_CF).truncate();
+                SystemTable.schemaCFS(SystemTable.SCHEMA_COLUMNS_CF).truncate();
+            }});
+
+            if (logger.isDebugEnabled())
+                logger.debug("Clearing local schema keyspace definitions...");
+
+            Schema.instance.clear();
+
+            Set<InetAddress> liveEndpoints = Gossiper.instance.getLiveMembers();
+            liveEndpoints.remove(FBUtilities.getBroadcastAddress());
+
+            // force migration is there are nodes around, first of all
+            // check if there are nodes with versions >= 1.1 to request migrations from,
+            // because migration format of the nodes with versions < 1.1 is incompatible with older versions
+            for (InetAddress node : liveEndpoints)
             {
-                public void run()
+                if (Gossiper.instance.getVersion(node) >= MessagingService.VERSION_11)
                 {
-                    try
-                    {
-                        migration.apply();
-                    }
-                    catch (ConfigurationException ex)
-                    {
-                        // this happens if we try to apply something that's already been applied. ignore and proceed.
-                        logger.debug("Migration not applied " + ex.getMessage());
-                    }
-                    catch (IOException ex)
-                    {
-                        throw new RuntimeException(ex);
-                    }
+                    if (logger.isDebugEnabled())
+                        logger.debug("Requesting schema from " + node);
+
+                    FBUtilities.waitOnFuture(StageManager.getStage(Stage.MIGRATION).submit(new MigrationTask(node)));
+                    break;
                 }
-            });
-            updates.add(update);
+            }
+
+            logger.info("Local schema reset is complete.");
         }
-        
-        // wait on all the updates before proceeding.
-        for (Future<?> f : updates)
+        catch (InterruptedException e)
         {
-            try
-            {
-                f.get();
-            }
-            catch (InterruptedException e)
-            {
-                throw new IOException(e);
-            }
-            catch (ExecutionException e)
-            {
-                throw new IOException(e);
-            }
+            throw new RuntimeException(e);
         }
-        passiveAnnounce(to); // we don't need to send rpcs, but we need to update gossip
+        catch (ExecutionException e)
+        {
+            throw new RuntimeException(e);
+        }
     }
 
-    // other half of transformation is in DefinitionsUpdateResponseVerbHandler.
-    private static Message makeMigrationMessage(Collection<IColumn> migrations, int version) throws IOException
+    /**
+     * Used only in case node has old style migration schema (newly updated)
+     * @return the UUID identifying version of the last applied migration
+     */
+    @Deprecated
+    public static UUID getLastMigrationId()
     {
-    	FastByteArrayOutputStream bout = new FastByteArrayOutputStream();
-        DataOutputStream dout = new DataOutputStream(bout);
-        dout.writeInt(migrations.size());
-        // riddle me this: how do we know that these binary values (which contained serialized row mutations) are compatible
-        // with the destination?  Further, since these migrations may be old, how do we know if they are compatible with
-        // the current version?  The bottom line is that we don't.  For this reason, running migrations from a new node
-        // to an old node will be a crap shoot.  Pushing migrations from an old node to a new node should work, so long
-        // as the oldest migrations are only one version old.  We need a way of flattening schemas so that this isn't a
-        // problem during upgrades.
-        for (IColumn col : migrations)
-        {
-            assert col instanceof Column;
-            ByteBufferUtil.writeWithLength(col.name(), dout);
-            ByteBufferUtil.writeWithLength(col.value(), dout);
-        }
-        dout.close();
-        byte[] body = bout.toByteArray();
-        return new Message(FBUtilities.getBroadcastAddress(), StorageService.Verb.DEFINITIONS_UPDATE, body, version);
+        DecoratedKey dkey = StorageService.getPartitioner().decorateKey(LAST_MIGRATION_KEY);
+        Table defs = Table.open(Table.SYSTEM_TABLE);
+        ColumnFamilyStore cfStore = defs.getColumnFamilyStore(DefsTable.OLD_SCHEMA_CF);
+        QueryFilter filter = QueryFilter.getNamesFilter(dkey, new QueryPath(DefsTable.OLD_SCHEMA_CF), LAST_MIGRATION_KEY);
+        ColumnFamily cf = cfStore.getColumnFamily(filter);
+        if (cf == null || cf.getColumnNames().size() == 0)
+            return null;
+        else
+            return UUIDGen.getUUID(cf.getColumn(LAST_MIGRATION_KEY).value());
     }
-    
-    // other half of this transformation is in MigrationManager.
-    public static Collection<Column> makeColumns(Message msg) throws IOException
+
+    public static class MigrationsSerializer implements IVersionedSerializer<Collection<RowMutation>>
     {
-        Collection<Column> cols = new ArrayList<Column>();
-        DataInputStream in = new DataInputStream(new FastByteArrayInputStream(msg.getMessageBody()));
-        int count = in.readInt();
-        for (int i = 0; i < count; i++)
+        public static MigrationsSerializer instance = new MigrationsSerializer();
+
+        public void serialize(Collection<RowMutation> schema, DataOutput out, int version) throws IOException
         {
-            byte[] name = new byte[in.readInt()];
-            in.readFully(name);
-            byte[] value = new byte[in.readInt()];
-            in.readFully(value);
-            cols.add(new Column(ByteBuffer.wrap(name), ByteBuffer.wrap(value)));
+            out.writeInt(schema.size());
+            for (RowMutation rm : schema)
+                RowMutation.serializer.serialize(rm, out, version);
         }
-        in.close();
-        return cols;
+
+        public Collection<RowMutation> deserialize(DataInput in, int version) throws IOException
+        {
+            int count = in.readInt();
+            Collection<RowMutation> schema = new ArrayList<RowMutation>(count);
+
+            for (int i = 0; i < count; i++)
+                schema.add(RowMutation.serializer.deserialize(in, version));
+
+            return schema;
+        }
+
+        public long serializedSize(Collection<RowMutation> schema, int version)
+        {
+            int size = TypeSizes.NATIVE.sizeof(schema.size());
+            for (RowMutation rm : schema)
+                size += RowMutation.serializer.serializedSize(rm, version);
+            return size;
+        }
     }
 }

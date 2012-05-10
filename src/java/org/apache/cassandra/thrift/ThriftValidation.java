@@ -1,6 +1,4 @@
-package org.apache.cassandra.thrift;
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,17 +6,16 @@ package org.apache.cassandra.thrift;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+package org.apache.cassandra.thrift;
 
 import java.nio.ByteBuffer;
 import java.util.*;
@@ -28,12 +25,10 @@ import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.config.*;
 import org.apache.cassandra.db.*;
-import org.apache.cassandra.db.index.SecondaryIndex;
 import org.apache.cassandra.db.marshal.AbstractType;
 import org.apache.cassandra.db.marshal.AsciiType;
 import org.apache.cassandra.db.marshal.MarshalException;
 import org.apache.cassandra.db.marshal.TypeParser;
-import org.apache.cassandra.db.migration.Migration;
 import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.dht.RandomPartitioner;
 import org.apache.cassandra.dht.Token;
@@ -53,7 +48,7 @@ import org.apache.cassandra.utils.FBUtilities;
  */
 public class ThriftValidation
 {
-    private static Logger logger = LoggerFactory.getLogger(ThriftValidation.class);
+    private static final Logger logger = LoggerFactory.getLogger(ThriftValidation.class);
 
     public static void validateKey(CFMetaData metadata, ByteBuffer key) throws InvalidRequestException
     {
@@ -235,7 +230,7 @@ public class ThriftValidation
             if (metadata.cfType == ColumnFamilyType.Standard)
                 throw new InvalidRequestException("supercolumn specified to ColumnFamily " + metadata.cfName + " containing normal columns");
         }
-        AbstractType comparator = metadata.getComparatorFor(superColumnName);
+        AbstractType<?> comparator = metadata.getComparatorFor(superColumnName);
         for (ByteBuffer name : column_names)
         {
             if (name.remaining() > IColumn.MAX_NAME_LENGTH)
@@ -260,7 +255,7 @@ public class ThriftValidation
 
     public static void validateRange(CFMetaData metadata, ColumnParent column_parent, SliceRange range) throws InvalidRequestException
     {
-        AbstractType comparator = metadata.getComparatorFor(column_parent.super_column);
+        AbstractType<?> comparator = metadata.getComparatorFor(column_parent.super_column);
         try
         {
             comparator.validate(range.start);
@@ -428,7 +423,7 @@ public class ThriftValidation
         ColumnDefinition columnDef = metadata.getColumnDefinition(column.name);
         try
         {
-            AbstractType validator = metadata.getValueValidator(columnDef);
+            AbstractType<?> validator = metadata.getValueValidator(columnDef);
             if (validator != null)
                 validator.validate(column.value);
         }
@@ -479,22 +474,19 @@ public class ThriftValidation
             validateColumnNames(metadata, column_parent, predicate.column_names);
     }
 
-    public static void validateKeyRange(KeyRange range) throws InvalidRequestException
+    public static void validateKeyRange(CFMetaData metadata, ByteBuffer superColumn, KeyRange range) throws InvalidRequestException
     {
-        if ((range.start_key == null) != (range.end_key == null))
-        {
-            throw new InvalidRequestException("start key and end key must either both be non-null, or both be null");
-        }
-        if ((range.start_token == null) != (range.end_token == null))
-        {
-            throw new InvalidRequestException("start token and end token must either both be non-null, or both be null");
-        }
-        if ((range.start_key == null) == (range.start_token == null))
+        if ((range.start_key == null) == (range.start_token == null)
+            || (range.end_key == null) == (range.end_token == null))
         {
             throw new InvalidRequestException("exactly one of {start key, end key} or {start token, end token} must be specified");
         }
 
-        if (range.start_key != null)
+        // (key, token) is supported (for wide-row CFRR) but not (token, key)
+        if (range.start_token != null && range.end_key != null)
+            throw new InvalidRequestException("start token + end key is not a supported key range");
+
+        if (range.start_key != null && range.end_key != null)
         {
             IPartitioner p = StorageService.getPartitioner();
             Token startToken = p.getToken(range.start_key);
@@ -508,10 +500,22 @@ public class ThriftValidation
             }
         }
 
+        validateFilterClauses(metadata, range.row_filter);
+
+        if (!isEmpty(range.row_filter) && superColumn != null)
+        {
+            throw new InvalidRequestException("super columns are not supported for indexing");
+        }
+
         if (range.count <= 0)
         {
             throw new InvalidRequestException("maxRows must be positive");
         }
+    }
+
+    private static boolean isEmpty(List<IndexExpression> clause)
+    {
+        return clause == null || clause.isEmpty();
     }
 
     public static void validateIndexClauses(CFMetaData metadata, IndexClause index_clause)
@@ -519,11 +523,24 @@ public class ThriftValidation
     {
         if (index_clause.expressions.isEmpty())
             throw new InvalidRequestException("index clause list may not be empty");
+
+        if (!validateFilterClauses(metadata, index_clause.expressions))
+            throw new InvalidRequestException("No indexed columns present in index clause with operator EQ");
+    }
+
+    // return true if index_clause contains an indexed columns with operator EQ
+    public static boolean validateFilterClauses(CFMetaData metadata, List<IndexExpression> index_clause)
+    throws InvalidRequestException
+    {
+        if (isEmpty(index_clause))
+            // no filter to apply
+            return false;
+
         Set<ByteBuffer> indexedColumns = Table.open(metadata.ksName).getColumnFamilyStore(metadata.cfName).indexManager.getIndexedColumns();
-        AbstractType nameValidator =  ColumnFamily.getComparatorFor(metadata.ksName, metadata.cfName, null);
+        AbstractType<?> nameValidator =  ColumnFamily.getComparatorFor(metadata.ksName, metadata.cfName, null);
 
         boolean isIndexed = false;
-        for (IndexExpression expression : index_clause.expressions)
+        for (IndexExpression expression : index_clause)
         {
             try
             {
@@ -537,7 +554,7 @@ public class ThriftValidation
                                                                 me.getMessage()));
             }
 
-            AbstractType valueValidator = Schema.instance.getValueValidator(metadata.ksName, metadata.cfName, expression.column_name);
+            AbstractType<?> valueValidator = Schema.instance.getValueValidator(metadata.ksName, metadata.cfName, expression.column_name);
             try
             {
                 valueValidator.validate(expression.value);
@@ -553,130 +570,7 @@ public class ThriftValidation
             isIndexed |= (expression.op == IndexOperator.EQ) && indexedColumns.contains(expression.column_name);
         }
 
-        if (!isIndexed)
-            throw new InvalidRequestException("No indexed columns present in index clause with operator EQ");
-    }
-
-    public static void validateCfDef(CfDef cf_def, CFMetaData old) throws InvalidRequestException
-    {
-        try
-        {
-            if (cf_def.key_alias != null)
-            {
-                if (!cf_def.key_alias.hasRemaining())
-                    throw new InvalidRequestException("key_alias may not be empty");
-                try
-                {
-                    // it's hard to use a key in a select statement if we can't type it.
-                    // for now let's keep it simple and require ascii.
-                    AsciiType.instance.validate(cf_def.key_alias);
-                }
-                catch (MarshalException e)
-                {
-                    throw new InvalidRequestException("Key aliases must be ascii");
-                }
-            }
-
-            ColumnFamilyType cfType = ColumnFamilyType.create(cf_def.column_type);
-            if (cfType == null)
-                throw new InvalidRequestException("invalid column type " + cf_def.column_type);
-
-            TypeParser.parse(cf_def.key_validation_class);
-            TypeParser.parse(cf_def.comparator_type);
-            TypeParser.parse(cf_def.subcomparator_type);
-            TypeParser.parse(cf_def.default_validation_class);
-            if (cfType != ColumnFamilyType.Super && cf_def.subcomparator_type != null)
-                throw new InvalidRequestException("subcomparator_type is invalid for standard columns");
-
-            if (cf_def.column_metadata == null)
-                return;
-
-            AbstractType comparator = cfType == ColumnFamilyType.Standard
-                                    ? TypeParser.parse(cf_def.comparator_type)
-                                    : TypeParser.parse(cf_def.subcomparator_type);
-
-            if (cf_def.key_alias != null)
-            {
-                // check if any of the columns has name equal to the cf.key_alias
-                for (ColumnDef columnDef : cf_def.column_metadata)
-                {
-                    if (cf_def.key_alias.equals(columnDef.name))
-                        throw new InvalidRequestException("Invalid column name: "
-                                                          + AsciiType.instance.compose(cf_def.key_alias)
-                                                          + ", because it equals the key_alias");
-                }
-            }
-
-            // initialize a set of names NOT in the CF under consideration
-            Set<String> indexNames = new HashSet<String>();
-            for (ColumnFamilyStore cfs : ColumnFamilyStore.all())
-            {
-                if (!cfs.getColumnFamilyName().equals(cf_def.name))
-                    for (ColumnDefinition cd : cfs.metadata.getColumn_metadata().values())
-                        indexNames.add(cd.getIndexName());
-            }
-
-            for (ColumnDef c : cf_def.column_metadata)
-            {
-                TypeParser.parse(c.validation_class);
-
-                try
-                {
-                    comparator.validate(c.name);
-                }
-                catch (MarshalException e)
-                {
-                    throw new InvalidRequestException(String.format("Column name %s is not valid for comparator %s",
-                                                                    ByteBufferUtil.bytesToHex(c.name), cf_def.comparator_type));
-                }
-
-                if (c.index_type == null)
-                {
-                    if (c.index_name != null)
-                        throw new ConfigurationException("index_name cannot be set without index_type");
-                }
-                else
-                {
-                    if (cfType == ColumnFamilyType.Super)
-                        throw new InvalidRequestException("Secondary indexes are not supported on supercolumns");
-                    assert c.index_name != null; // should have a default set by now if none was provided
-                    if (!Migration.isLegalName(c.index_name))
-                        throw new InvalidRequestException("Illegal index name " + c.index_name);
-                    // check index names against this CF _and_ globally
-                    if (indexNames.contains(c.index_name))
-                        throw new InvalidRequestException("Duplicate index name " + c.index_name);
-                    indexNames.add(c.index_name);
-
-                    ColumnDefinition oldCd = old == null ? null : old.getColumnDefinition(c.name);
-                    if (oldCd != null && oldCd.getIndexType() != null)
-                    {
-                        assert oldCd.getIndexName() != null;
-                        if (!oldCd.getIndexName().equals(c.index_name))
-                            throw new InvalidRequestException("Cannot modify index name");
-                    }
-                    
-                    if (c.index_type == IndexType.CUSTOM)
-                    {
-                        if (c.index_options == null || !c.index_options.containsKey(SecondaryIndex.CUSTOM_INDEX_OPTION_NAME))
-                            throw new InvalidRequestException("Required index option missing: " + SecondaryIndex.CUSTOM_INDEX_OPTION_NAME);                    
-                    }
-                    
-                    // Create the index type and validate the options
-                    ColumnDefinition cdef = ColumnDefinition.fromThrift(c);
-                   
-                    // This method validates the column metadata but does not intialize the index
-                    SecondaryIndex.createInstance(null, cdef);
-                }
-            }
-            validateMinMaxCompactionThresholds(cf_def);
-
-            // validates compression parameters
-            CompressionParameters.create(cf_def.compression_options);
-        }
-        catch (ConfigurationException e)
-        {
-            throw new InvalidRequestException(e.getMessage());
-        }
+        return isIndexed;
     }
 
     public static void validateCommutativeForWrite(CFMetaData metadata, ConsistencyLevel consistency) throws InvalidRequestException
@@ -691,54 +585,6 @@ public class ThriftValidation
         }
     }
 
-    public static void validateKsDef(KsDef ks_def) throws ConfigurationException
-    {
-        // Attempt to instantiate the ARS, which will throw a ConfigException if
-        //  the strategy_options aren't fully formed or if the ARS Classname is invalid.
-        Map<String, String> options = KSMetaData.forwardsCompatibleOptions(ks_def);
-        TokenMetadata tmd = StorageService.instance.getTokenMetadata();
-        IEndpointSnitch eps = DatabaseDescriptor.getEndpointSnitch();
-        Class<? extends AbstractReplicationStrategy> cls = AbstractReplicationStrategy.getClass(ks_def.strategy_class);
-
-        if (cls.equals(LocalStrategy.class))
-            throw new ConfigurationException("Unable to use given strategy class: LocalStrategy is reserved for internal use.");
-
-        AbstractReplicationStrategy.createReplicationStrategy(ks_def.name, cls, tmd, eps, options);
-    }
-
-    public static void validateMinMaxCompactionThresholds(org.apache.cassandra.thrift.CfDef cf_def) throws ConfigurationException
-    {
-        if (cf_def.isSetMin_compaction_threshold() && cf_def.isSetMax_compaction_threshold())
-        {
-            validateMinCompactionThreshold(cf_def.min_compaction_threshold, cf_def.max_compaction_threshold);
-        }
-        else if (cf_def.isSetMin_compaction_threshold())
-        {
-            validateMinCompactionThreshold(cf_def.min_compaction_threshold, CFMetaData.DEFAULT_MAX_COMPACTION_THRESHOLD);
-        }
-        else if (cf_def.isSetMax_compaction_threshold())
-        {
-            if (cf_def.max_compaction_threshold < CFMetaData.DEFAULT_MIN_COMPACTION_THRESHOLD && cf_def.max_compaction_threshold != 0)
-            {
-                throw new ConfigurationException("max_compaction_threshold cannot be less than min_compaction_threshold");
-            }
-        }
-        else
-        {
-            //Defaults are valid.
-        }
-    }
-
-    public static void validateMinCompactionThreshold(int min_compaction_threshold, int max_compaction_threshold) throws ConfigurationException
-    {
-        if (min_compaction_threshold <= 1)
-            throw new ConfigurationException("min_compaction_threshold cannot be less than 2.");
-
-        if (min_compaction_threshold > max_compaction_threshold && max_compaction_threshold != 0)
-            throw new ConfigurationException(String.format("min_compaction_threshold cannot be greater than max_compaction_threshold %d",
-                                                            max_compaction_threshold));
-    }
-
     public static void validateKeyspaceNotYetExisting(String newKsName) throws InvalidRequestException
     {
         // keyspace names must be unique case-insensitively because the keyspace name becomes the directory
@@ -751,5 +597,11 @@ public class ThriftValidation
                                                                 newKsName,
                                                                 ksName));
         }
+    }
+
+    public static void validateKeyspaceNotSystem(String modifiedKeyspace) throws InvalidRequestException
+    {
+        if (modifiedKeyspace.equalsIgnoreCase(Table.SYSTEM_TABLE))
+            throw new InvalidRequestException("system keyspace is not user-modifiable");
     }
 }

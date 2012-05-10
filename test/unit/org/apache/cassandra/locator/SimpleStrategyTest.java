@@ -29,7 +29,7 @@ import java.util.List;
 import org.apache.cassandra.config.Schema;
 import org.junit.Test;
 
-import org.apache.cassandra.CleanupHelper;
+import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.config.ConfigurationException;
 import org.apache.cassandra.config.KSMetaData;
 import org.apache.cassandra.db.Table;
@@ -40,7 +40,7 @@ import org.apache.cassandra.utils.ByteBufferUtil;
 
 import static org.junit.Assert.*;
 
-public class SimpleStrategyTest extends CleanupHelper
+public class SimpleStrategyTest extends SchemaLoader
 {
     @Test
     public void tryValidTable()
@@ -103,7 +103,7 @@ public class SimpleStrategyTest extends CleanupHelper
             }
         }
     }
-    
+
     @Test
     public void testGetEndpointsDuringBootstrap() throws UnknownHostException, ConfigurationException
     {
@@ -114,13 +114,13 @@ public class SimpleStrategyTest extends CleanupHelper
 
         Token[] endpointTokens = new Token[RING_SIZE];
         Token[] keyTokens = new Token[RING_SIZE];
-        
+
         for (int i = 0; i < RING_SIZE; i++)
         {
             endpointTokens[i] = new BigIntegerToken(String.valueOf(RING_SIZE * 2 * i));
             keyTokens[i] = new BigIntegerToken(String.valueOf(RING_SIZE * 2 * i + RING_SIZE));
         }
-        
+
         List<InetAddress> hosts = new ArrayList<InetAddress>();
         for (int i = 0; i < endpointTokens.length; i++)
         {

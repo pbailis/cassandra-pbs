@@ -23,7 +23,6 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.management.MBeanServer;
@@ -32,7 +31,7 @@ import javax.management.ObjectName;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.service.StorageService;
-import org.apache.cassandra.utils.AbstractStatsDeque;
+import org.apache.cassandra.utils.BoundedStatsDeque;
 import org.apache.cassandra.utils.FBUtilities;
 
 /**
@@ -50,14 +49,21 @@ public class DynamicEndpointSnitch extends AbstractEndpointSnitch implements ILa
     private boolean registered = false;
 
     private final ConcurrentHashMap<InetAddress, Double> scores = new ConcurrentHashMap<InetAddress, Double>();
-    private final ConcurrentHashMap<InetAddress, AdaptiveLatencyTracker> windows = new ConcurrentHashMap<InetAddress, AdaptiveLatencyTracker>();
+    private final ConcurrentHashMap<InetAddress, Long> lastReceived = new ConcurrentHashMap<InetAddress, Long>();
+    private final ConcurrentHashMap<InetAddress, BoundedStatsDeque> windows = new ConcurrentHashMap<InetAddress, BoundedStatsDeque>();
     private final AtomicInteger intervalupdates = new AtomicInteger(0);
 
     public final IEndpointSnitch subsnitch;
 
     public DynamicEndpointSnitch(IEndpointSnitch snitch)
     {
-        mbeanName = "org.apache.cassandra.db:type=DynamicEndpointSnitch,instance="+hashCode();
+        this(snitch, null);
+    }
+    public DynamicEndpointSnitch(IEndpointSnitch snitch, String instance)
+    {
+        mbeanName = "org.apache.cassandra.db:type=DynamicEndpointSnitch";
+        if (instance != null)
+            mbeanName += ",instance=" + instance;
         subsnitch = snitch;
         Runnable update = new Runnable()
         {
@@ -196,17 +202,18 @@ public class DynamicEndpointSnitch extends AbstractEndpointSnitch implements ILa
 
     public void receiveTiming(InetAddress host, Double latency) // this is cheap
     {
+        lastReceived.put(host, System.currentTimeMillis());
         if (intervalupdates.intValue() >= UPDATES_PER_INTERVAL)
             return;
-        AdaptiveLatencyTracker tracker = windows.get(host);
-        if (tracker == null)
+        BoundedStatsDeque deque = windows.get(host);
+        if (deque == null)
         {
-            AdaptiveLatencyTracker alt = new AdaptiveLatencyTracker(WINDOW_SIZE);
-            tracker = windows.putIfAbsent(host, alt);
-            if (tracker == null)
-                tracker = alt;
+            BoundedStatsDeque maybeNewDeque = new BoundedStatsDeque(WINDOW_SIZE);
+            deque = windows.putIfAbsent(host, maybeNewDeque);
+            if (deque == null)
+                deque = maybeNewDeque;
         }
-        tracker.add(latency);
+        deque.add(latency);
         intervalupdates.getAndIncrement();
     }
 
@@ -223,18 +230,40 @@ public class DynamicEndpointSnitch extends AbstractEndpointSnitch implements ILa
             }
 
         }
-        for (Map.Entry<InetAddress, AdaptiveLatencyTracker> entry: windows.entrySet())
+        double maxLatency = 1;
+        long maxPenalty = 1;
+        HashMap<InetAddress, Long> penalties = new HashMap<InetAddress, Long>();
+        for (Map.Entry<InetAddress, BoundedStatsDeque> entry : windows.entrySet())
         {
-            scores.put(entry.getKey(), entry.getValue().score());
+            double mean = entry.getValue().mean();
+            if (mean > maxLatency)
+                maxLatency = mean;
+            long timePenalty = lastReceived.containsKey(entry.getKey()) ? lastReceived.get(entry.getKey()) : System.currentTimeMillis();
+            timePenalty = System.currentTimeMillis() - timePenalty;
+            timePenalty = timePenalty > UPDATE_INTERVAL_IN_MS ? UPDATE_INTERVAL_IN_MS : timePenalty;
+            penalties.put(entry.getKey(), timePenalty);
+            if (timePenalty > maxPenalty)
+                maxPenalty = timePenalty;
+        }
+        for (Map.Entry<InetAddress, BoundedStatsDeque> entry: windows.entrySet())
+        {
+            double score = entry.getValue().mean() / maxLatency;
+            if (penalties.containsKey(entry.getKey()))
+                score += penalties.get(entry.getKey()) / ((double) maxPenalty);
+            else
+                score += 1; // maxPenalty / maxPenalty
+            score += StorageService.instance.getSeverity(entry.getKey());
+            scores.put(entry.getKey(), score);            
         }
         intervalupdates.set(0);
     }
 
+
     private void reset()
     {
-        for (AdaptiveLatencyTracker tracker : windows.values())
+        for (BoundedStatsDeque deque : windows.values())
         {
-            tracker.clear();
+            deque.clear();
         }
     }
 
@@ -264,7 +293,7 @@ public class DynamicEndpointSnitch extends AbstractEndpointSnitch implements ILa
     {
         InetAddress host = InetAddress.getByName(hostname);
         ArrayList<Double> timings = new ArrayList<Double>();
-        AdaptiveLatencyTracker window = windows.get(host);
+        BoundedStatsDeque window = windows.get(host);
         if (window != null)
         {
             for (double time: window)
@@ -275,52 +304,14 @@ public class DynamicEndpointSnitch extends AbstractEndpointSnitch implements ILa
         return timings;
     }
 
-}
-
-/** a threadsafe version of BoundedStatsDeque+ArrivalWindow with modification for arbitrary times **/
-class AdaptiveLatencyTracker extends AbstractStatsDeque
-{
-    private final LinkedBlockingDeque<Double> latencies;
-
-    AdaptiveLatencyTracker(int size)
+    public void setSeverity(double severity)
     {
-        latencies = new LinkedBlockingDeque<Double>(size);
+        StorageService.instance.reportSeverity(severity);
     }
 
-    public void add(double i)
+    public double getSeverity()
     {
-        if (!latencies.offer(i))
-        {
-            try
-            {
-                latencies.remove();
-            }
-            catch (NoSuchElementException e)
-            {
-                // oops, clear() beat us to it
-            }
-            latencies.offer(i);
-        }
-    }
-
-    public void clear()
-    {
-        latencies.clear();
-    }
-
-    public Iterator<Double> iterator()
-    {
-        return latencies.iterator();
-    }
-
-    public int size()
-    {
-        return latencies.size();
-    }
-
-    double score()
-    {
-        return (size() > 0) ? mean() : 0.0;
+        return StorageService.instance.getSeverity(FBUtilities.getBroadcastAddress());
     }
 
 }

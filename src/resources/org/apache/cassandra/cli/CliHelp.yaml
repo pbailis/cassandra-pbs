@@ -215,9 +215,9 @@ commands:
           one datacenter defined with a replication factor of 1 ("[datacenter1:1]").
 
           Supported values are:
-            - org.apache.Cassandra.locator.SimpleStrategy
-            - org.apache.Cassandra.locator.NetworkTopologyStrategy
-            - org.apache.Cassandra.locator.OldNetworkTopologyStrategy
+            - org.apache.cassandra.locator.SimpleStrategy
+            - org.apache.cassandra.locator.NetworkTopologyStrategy
+            - org.apache.cassandra.locator.OldNetworkTopologyStrategy
 
           SimpleStrategy merely places the first replica at the node whose
           token is closest to the key (as determined by the Partitioner), and
@@ -283,9 +283,9 @@ commands:
           one datacenter defined with a replication factor of 1 ("[datacenter1:1]").
 
           Supported values are:
-            - org.apache.Cassandra.locator.SimpleStrategy
-            - org.apache.Cassandra.locator.NetworkTopologyStrategy
-            - org.apache.Cassandra.locator.OldNetworkTopologyStrategy
+            - org.apache.cassandra.locator.SimpleStrategy
+            - org.apache.cassandra.locator.NetworkTopologyStrategy
+            - org.apache.cassandra.locator.OldNetworkTopologyStrategy
 
           SimpleStrategy merely places the first replica at the node whose
           token is closest to the key (as determined by the Partitioner), and
@@ -359,16 +359,22 @@ commands:
 
               Supported values are:
                 - AsciiType
+                - BooleanType
                 - BytesType
                 - CounterColumnType (distributed counter column)
+                - DateType
+                - DoubleType
+                - FloatType
                 - Int32Type
                 - IntegerType (a generic variable-length integer type)
                 - LexicalUUIDType
                 - LongType
                 - UTF8Type
+                - CompositeType (should be used with sub-types specified e.g. 'CompositeType(UTF8Type, Int32Type)'
+                  quotes are important (!) in this case)
 
               It is also valid to specify the fully-qualified class name to a class
-              that extends org.apache.Cassandra.db.marshal.AbstractType.
+              that extends org.apache.cassandra.db.marshal.AbstractType.
 
           Column Optional parameters:
             - index_name: Name for the index. Both an index name and
@@ -401,16 +407,22 @@ commands:
 
           Supported values are:
             - AsciiType
+            - BooleanType
             - BytesType
             - CounterColumnType (distributed counter column)
+            - DateType
+            - DoubleType
+            - FloatType
             - Int32Type
             - IntegerType (a generic variable-length integer type)
             - LexicalUUIDType
             - LongType
             - UTF8Type
+            - CompositeType (should be used with sub-types specified e.g. 'CompositeType(UTF8Type, Int32Type)'
+              quotes are important (!) in this case)
 
           It is also valid to specify the fully-qualified class name to a class that
-          extends org.apache.Cassandra.db.marshal.AbstractType.
+          extends org.apache.cassandra.db.marshal.AbstractType.
 
         - default_validation_class: Validator to use for values in columns which are
           not listed in the column_metadata. Default is BytesType which applies
@@ -418,23 +430,33 @@ commands:
 
           Supported values are:
             - AsciiType
+            - BooleanType
             - BytesType
             - CounterColumnType (distributed counter column)
+            - DateType
+            - DoubleType
+            - FloatType
             - Int32Type
             - IntegerType (a generic variable-length integer type)
             - LexicalUUIDType
             - LongType
             - UTF8Type
+            - CompositeType (should be used with sub-types specified e.g. 'CompositeType(UTF8Type, Int32Type)'
+              quotes are important (!) in this case)
 
           It is also valid to specify the fully-qualified class name to a class that
-          extends org.apache.Cassandra.db.marshal.AbstractType.
+          extends org.apache.cassandra.db.marshal.AbstractType.
 
         - key_validation_class: Validator to use for keys.
           Default is BytesType which applies no validation.
 
           Supported values are:
             - AsciiType
+            - BooleanType
             - BytesType
+            - DateType
+            - DoubleType
+            - FloatType
             - Int32Type
             - IntegerType (a generic variable-length integer type)
             - LexicalUUIDType
@@ -442,7 +464,7 @@ commands:
             - UTF8Type
 
           It is also valid to specify the fully-qualified class name to a class that
-          extends org.apache.Cassandra.db.marshal.AbstractType.
+          extends org.apache.cassandra.db.marshal.AbstractType.
 
         - gc_grace: Time to wait in seconds before garbage collecting tombstone
           deletion markers. Default value is 864000 or 10 days.
@@ -460,6 +482,20 @@ commands:
           will not have any latency information from all the replicas to recognize
           when one is performing worse than usual.
 
+        - dclocal_read_repair_chance: Probability (0.0-1.0) with which to
+          perform read repairs against the node from the local data-center. If
+          this is lower than read_repair_chance, this will be ignored.
+
+          Example:
+            update column family Standard2
+                 with read_repair_chance=0.1
+                 and dclocal_read_repair_chance=0.5;
+
+            For 10 read queries, 1 will do read repair on all replicas (and
+            thus in particular on all replica of the local DC), 4 will only do
+            read repair on replica of the local DC and 5 will not do any read
+            repair.
+
         - subcomparator:  Validator to use to validate and compare sub column names
           in this column family. Only applied to Super column families. Default is
           BytesType, which is a straight forward lexical comparison of the bytes in
@@ -467,8 +503,12 @@ commands:
 
           Supported values are:
             - AsciiType
+            - BooleanType
             - BytesType
             - CounterColumnType (distributed counter column)
+            - DateType
+            - DoubleType
+            - FloatType
             - Int32Type
             - IntegerType (a generic variable-length integer type)
             - LexicalUUIDType
@@ -476,7 +516,7 @@ commands:
             - UTF8Type
 
           It is also valid to specify the fully-qualified class name to a class that
-          extends org.apache.Cassandra.db.marshal.AbstractType.
+          extends org.apache.cassandra.db.marshal.AbstractType.
 
         - max_compaction_threshold: The maximum number of SSTables allowed before a
         minor compaction is forced. Default is 32, setting to 0 disables minor
@@ -518,10 +558,10 @@ commands:
         create column family Super4
             with column_type = 'Super'
             and comparator = 'AsciiType'
-            and rows_cached = 10000;
+            and caching='ALL';
         create column family Standard3
             with comparator = 'LongType'
-            and rows_cached = 10000;
+            and caching='ALL';
         create column family Standard4
             with comparator = AsciiType
             and column_metadata =
@@ -560,16 +600,22 @@ commands:
 
               Supported values are:
                 - AsciiType
+                - BooleanType
                 - BytesType
                 - CounterColumnType (distributed counter column)
+                - DateType
+                - DoubleType
+                - FloatType
                 - Int32Type
                 - IntegerType (a generic variable-length integer type)
                 - LexicalUUIDType
                 - LongType
                 - UTF8Type
+                - CompositeType (should be used with sub-types specified e.g. 'CompositeType(UTF8Type, Int32Type)'
+                  quotes are important (!) in this case)
 
               It is also valid to specify the fully-qualified class name to a class
-              that extends org.apache.Cassandra.db.marshal.AbstractType.
+              that extends org.apache.cassandra.db.marshal.AbstractType.
 
           Column Optional parameters:
             - index_name: Name for the index. Both an index name and
@@ -606,16 +652,22 @@ commands:
 
           Supported values are:
             - AsciiType
+            - BooleanType
             - BytesType
             - CounterColumnType (distributed counter column)
+            - DateType
+            - DoubleType
+            - FloatType
             - Int32Type
             - IntegerType (a generic variable-length integer type)
             - LexicalUUIDType
             - LongType
             - UTF8Type
+            - CompositeType (should be used with sub-types specified e.g. 'CompositeType(UTF8Type, Int32Type)'
+              quotes are important (!) in this case)
 
           It is also valid to specify the fully-qualified class name to a class that
-          extends org.apache.Cassandra.db.marshal.AbstractType.
+          extends org.apache.cassandra.db.marshal.AbstractType.
 
         - default_validation_class: Validator to use for values in columns which are
           not listed in the column_metadata. Default is BytesType which applies
@@ -623,23 +675,33 @@ commands:
 
           Supported values are:
             - AsciiType
+            - BooleanType
             - BytesType
             - CounterColumnType (distributed counter column)
+            - DateType
+            - DoubleType
+            - FloatType
             - Int32Type
             - IntegerType (a generic variable-length integer type)
             - LexicalUUIDType
             - LongType
             - UTF8Type
+            - CompositeType (should be used with sub-types specified e.g. 'CompositeType(UTF8Type, Int32Type)'
+              quotes are important (!) in this case)
 
           It is also valid to specify the fully-qualified class name to a class that
-          extends org.apache.Cassandra.db.marshal.AbstractType.
+          extends org.apache.cassandra.db.marshal.AbstractType.
 
-        - key_valiation_class: Validator to use for keys.
+        - key_validation_class: Validator to use for keys.
           Default is BytesType which applies no validation.
 
           Supported values are:
             - AsciiType
+            - BooleanType
             - BytesType
+            - DateType
+            - DoubleType
+            - FloatType
             - Int32Type
             - IntegerType (a generic variable-length integer type)
             - LexicalUUIDType
@@ -647,7 +709,7 @@ commands:
             - UTF8Type
 
           It is also valid to specify the fully-qualified class name to a class that
-          extends org.apache.Cassandra.db.marshal.AbstractType.
+          extends org.apache.cassandra.db.marshal.AbstractType.
 
         - gc_grace: Time to wait in seconds before garbage collecting tombstone
           deletion markers. Default value is 864000 or 10 days.
@@ -665,6 +727,20 @@ commands:
           will not have any latency information from all the replicas to recognize
           when one is performing worse than usual.
 
+        - dclocal_read_repair_chance: Probability (0.0-1.0) with which to
+          perform read repairs against the node from the local data-center. If
+          this is lower than read_repair_chance, this will be ignored.
+
+          Example:
+            update column family Standard2
+                 with read_repair_chance=0.1
+                 and dclocal_read_repair_chance=0.5;
+
+            For 10 read queries, 1 will do read repair on all replicas (and
+            thus in particular on all replica of the local DC), 4 will only do
+            read repair on replica of the local DC and 5 will not do any read
+            repair.
+
         - subcomparator:  Validator to use to validate and compare sub column names
           in this column family. Only applied to Super column families. Default is
           BytesType, which is a straight forward lexical comparison of the bytes in
@@ -672,8 +748,12 @@ commands:
 
           Supported values are:
             - AsciiType
+            - BooleanType
             - BytesType
             - CounterColumnType (distributed counter column)
+            - DateType
+            - DoubleType
+            - FloatType
             - Int32Type
             - IntegerType (a generic variable-length integer type)
             - LexicalUUIDType
@@ -681,7 +761,28 @@ commands:
             - UTF8Type
 
           It is also valid to specify the fully-qualified class name to a class that
-          extends org.apache.Cassandra.db.marshal.AbstractType.
+          extends org.apache.cassandra.db.marshal.AbstractType.
+
+        - caching: Enable/Disable caching for the column family.
+
+          There is 2 kind of caches: key cache and row cache. A column family
+          can be set to use no cache, only one of them or both.
+
+          A key cache hit saves 1 seek while a row cache hit avoids disk
+          completely (saving at least 2 seeks). However the row cache holds
+          entire rows and is thus much more space-intensive. Also, since full
+          rows are stored, row cache should be used only for column families
+          whose rows are small.
+
+          Note: the global memory size of both cache can be set in the
+          configuration file (yaml) or through JMX (though it isn't persisted
+          across restarts in that latter case).
+
+          Supported values are:
+            - ALL (Enable row cache and key Cache)
+            - KEYS_ONLY
+            - ROWS_ONLY
+            - NONE;
 
         - max_compaction_threshold: The maximum number of SSTables allowed before a
         minor compaction is forced. Default is 32, setting to 0 disables minor
@@ -722,9 +823,9 @@ commands:
         Examples:
         update column family Super4
             with column_type = 'Super'
-            and rows_cached = 10000;
+            and caching='ALL';
         update column family Standard3
-            with rows_cached = 10000;
+            and caching='ALL';
         update column family Standard4
             with column_metadata =
             [{
@@ -835,8 +936,12 @@ commands:
 
           Valid options are:
             - AsciiType
+            - BooleanType
             - BytesType
             - CounterColumnType (distributed counter column)
+            - DateType
+            - DoubleType
+            - FloatType
             - Int32Type
             - IntegerType (a generic variable-length integer type)
             - LexicalUUIDType
@@ -965,6 +1070,7 @@ commands:
         list <cf>[<startKey>:];
         list <cf>[<startKey>:<endKey>];
         list <cf>[<startKey>:<endKey>] limit <limit>;
+        list <cf>[<startKey>:<endKey>] ?(limit <limit>) ?(columns <col_limit> ?(reversed));
 
         List a range of rows, and all of their columns, in the specified column
         family.
@@ -980,6 +1086,9 @@ commands:
 
         - limit: Number of rows to return. Default is 100.
 
+        - columns: Number of columns to return per row, Default to MAX_INTEGER. reversed -
+        columns in reverse order.
+
         - startKey: Key start the range from. The start key will be
         included in the result. Defaults to an empty byte array.
 
@@ -987,6 +1096,9 @@ commands:
         list Standard1;
         list Super1[j:];
         list Standard1[j:k] limit 40;
+        list Standard1 columns 2;
+        list Standard1 limit 40 columns 0;
+        list Standard1 columns 3 reversed;
     - name: NODE_TRUNCATE
       help: |
         truncate <cf>;
@@ -1037,7 +1149,7 @@ commands:
             - utf8
 
           It is also valid to specify the fully-qualified class name to a class that
-          extends org.apache.Cassandra.db.marshal.AbstractType.
+          extends org.apache.cassandra.db.marshal.AbstractType.
 
         Examples:
         assume Standard1 comparator as lexicaluuid;

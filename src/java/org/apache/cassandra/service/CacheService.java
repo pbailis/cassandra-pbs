@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,7 +20,6 @@ package org.apache.cassandra.service;
 import java.lang.management.ManagementFactory;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 
@@ -30,9 +29,7 @@ import javax.management.ObjectName;
 import org.apache.cassandra.cache.*;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.ColumnFamily;
-import org.apache.cassandra.db.ColumnFamilyStore;
-import org.apache.cassandra.db.DecoratedKey;
-import org.apache.cassandra.db.Table;
+import org.apache.cassandra.db.RowIndexEntry;
 import org.apache.cassandra.utils.FBUtilities;
 
 import org.slf4j.Logger;
@@ -65,8 +62,8 @@ public class CacheService implements CacheServiceMBean
 
     public final static CacheService instance = new CacheService();
 
-    public final AutoSavingCache<KeyCacheKey, Long> keyCache;
-    public final AutoSavingCache<RowCacheKey, ColumnFamily> rowCache;
+    public final AutoSavingCache<KeyCacheKey, RowIndexEntry> keyCache;
+    public final AutoSavingCache<RowCacheKey, IRowCacheEntry> rowCache;
 
     private int rowCacheSavePeriod;
     private int keyCacheSavePeriod;
@@ -95,7 +92,7 @@ public class CacheService implements CacheServiceMBean
      * We can use Weighers.singleton() because Long can't be leaking memory
      * @return auto saving cache object
      */
-    private AutoSavingCache<KeyCacheKey, Long> initKeyCache()
+    private AutoSavingCache<KeyCacheKey, RowIndexEntry> initKeyCache()
     {
         logger.info("Initializing key cache with capacity of {} MBs.", DatabaseDescriptor.getKeyCacheSizeInMB());
 
@@ -103,8 +100,8 @@ public class CacheService implements CacheServiceMBean
 
         // as values are constant size we can use singleton weigher
         // where 48 = 40 bytes (average size of the key) + 8 bytes (size of value)
-        ICache<KeyCacheKey, Long> kc = ConcurrentLinkedHashCache.create(keyCacheInMemoryCapacity / AVERAGE_KEY_CACHE_ROW_SIZE);
-        AutoSavingCache<KeyCacheKey, Long> keyCache = new AutoSavingCache<KeyCacheKey, Long>(kc, CacheType.KEY_CACHE);
+        ICache<KeyCacheKey, RowIndexEntry> kc = ConcurrentLinkedHashCache.create(keyCacheInMemoryCapacity / AVERAGE_KEY_CACHE_ROW_SIZE);
+        AutoSavingCache<KeyCacheKey, RowIndexEntry> keyCache = new AutoSavingCache<KeyCacheKey, RowIndexEntry>(kc, CacheType.KEY_CACHE);
 
         int keyCacheKeysToSave = DatabaseDescriptor.getKeyCacheKeysToSave();
 
@@ -120,7 +117,7 @@ public class CacheService implements CacheServiceMBean
     /**
      * @return initialized row cache
      */
-    private AutoSavingCache<RowCacheKey, ColumnFamily> initRowCache()
+    private AutoSavingCache<RowCacheKey, IRowCacheEntry> initRowCache()
     {
         logger.info("Initializing row cache with capacity of {} MBs and provider {}",
                     DatabaseDescriptor.getRowCacheSizeInMB(),
@@ -129,8 +126,8 @@ public class CacheService implements CacheServiceMBean
         int rowCacheInMemoryCapacity = DatabaseDescriptor.getRowCacheSizeInMB() * 1024 * 1024;
 
         // cache object
-        ICache<RowCacheKey, ColumnFamily> rc = DatabaseDescriptor.getRowCacheProvider().create(rowCacheInMemoryCapacity, true);
-        AutoSavingCache<RowCacheKey, ColumnFamily> rowCache = new AutoSavingCache<RowCacheKey, ColumnFamily>(rc, CacheType.ROW_CACHE);
+        ICache<RowCacheKey, IRowCacheEntry> rc = DatabaseDescriptor.getRowCacheProvider().create(rowCacheInMemoryCapacity, true);
+        AutoSavingCache<RowCacheKey, IRowCacheEntry> rowCache = new AutoSavingCache<RowCacheKey, IRowCacheEntry>(rc, CacheType.ROW_CACHE);
 
         int rowCacheKeysToSave = DatabaseDescriptor.getRowCacheKeysToSave();
 
@@ -275,7 +272,7 @@ public class CacheService implements CacheServiceMBean
 
     public void saveCaches() throws ExecutionException, InterruptedException
     {
-        List<Future<?>> futures = new ArrayList<Future<?>>();
+        List<Future<?>> futures = new ArrayList<Future<?>>(2);
         logger.debug("submitting cache saves");
 
         futures.add(keyCache.submitWrite(DatabaseDescriptor.getKeyCacheKeysToSave()));

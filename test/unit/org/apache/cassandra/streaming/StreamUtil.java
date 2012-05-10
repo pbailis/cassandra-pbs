@@ -19,36 +19,28 @@
 
 package org.apache.cassandra.streaming;
 
-import java.io.ByteArrayInputStream;
-import java.io.DataInputStream;
+import java.io.IOError;
+import java.io.IOException;
 import java.net.InetAddress;
 
-import org.apache.cassandra.net.Message;
-import org.apache.cassandra.net.MessagingService;
-import org.apache.cassandra.service.StorageService;
+import org.apache.cassandra.net.MessageIn;
 
 public class StreamUtil
 {
-
     /**
      * Takes an stream request message and creates an empty status response. Exists here because StreamRequestMessage
      * is package protected.
      */
-    static public void finishStreamRequest(Message msg, InetAddress to) 
+    static public void finishStreamRequest(MessageIn<StreamRequest> msg, InetAddress to)
     {
-        byte[] body = msg.getMessageBody();
-        ByteArrayInputStream bufIn = new ByteArrayInputStream(body);
-
+        StreamInSession session = StreamInSession.get(to, msg.payload.sessionId);
         try
         {
-            StreamRequestMessage srm = StreamRequestMessage.serializer().deserialize(new DataInputStream(bufIn), MessagingService.version_);
-            StreamInSession session = StreamInSession.get(to, srm.sessionId);
             session.closeIfFinished();
         }
-        catch (Exception e)
+        catch (IOException e)
         {
-            System.err.println(e); 
-            e.printStackTrace();
+            throw new IOError(e);
         }
     }
 }

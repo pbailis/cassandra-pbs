@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.db;
 
 import java.io.IOException;
@@ -23,11 +22,8 @@ import java.nio.ByteBuffer;
 import java.net.InetAddress;
 import java.security.MessageDigest;
 import java.util.concurrent.TimeoutException;
-import java.util.Arrays;
-import java.util.Map;
 import java.util.Collection;
 
-import com.google.common.collect.Multimap;
 import org.apache.log4j.Logger;
 
 import org.apache.cassandra.config.CFMetaData;
@@ -97,13 +93,13 @@ public class CounterColumn extends Column
     }
 
     @Override
-    public int size()
+    public int size(TypeSizes typeSizes)
     {
         /*
          * A counter column adds to a Column :
          *  + 8 bytes for timestampOfLastDelete
          */
-        return super.size() + DBConstants.tsSize;
+        return super.size(typeSizes) + typeSizes.sizeof(timestampOfLastDelete);
     }
 
     @Override
@@ -208,7 +204,7 @@ public class CounterColumn extends Column
     }
 
     @Override
-    public String getString(AbstractType comparator)
+    public String getString(AbstractType<?> comparator)
     {
         StringBuilder sb = new StringBuilder();
         sb.append(comparator.getString(name));

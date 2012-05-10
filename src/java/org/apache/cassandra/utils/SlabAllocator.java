@@ -1,6 +1,4 @@
-/**
- * Copyright 2011 The Apache Software Foundation
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,15 +18,10 @@
 package org.apache.cassandra.utils;
 
 import java.nio.ByteBuffer;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.google.common.base.Preconditions;
-import com.google.common.collect.Iterables;
-import com.google.common.collect.MapMaker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -48,7 +41,7 @@ import org.slf4j.LoggerFactory;
  */
 public class SlabAllocator extends Allocator
 {
-    private static Logger logger = LoggerFactory.getLogger(SlabAllocator.class);
+    private static final Logger logger = LoggerFactory.getLogger(SlabAllocator.class);
 
     private final static int REGION_SIZE = 1024 * 1024;
     private final static int MAX_CLONED_SIZE = 128 * 1024; // bigger than this don't go in the region
@@ -80,7 +73,7 @@ public class SlabAllocator extends Allocator
             currentRegion.compareAndSet(region, null);
         }
     }
-    
+
     /**
      * Get the current region, or, if there is no current region, allocate a new one
      */

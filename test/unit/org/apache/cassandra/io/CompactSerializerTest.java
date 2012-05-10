@@ -1,6 +1,6 @@
 package org.apache.cassandra.io;
 /*
- * 
+ *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,20 +8,20 @@ package org.apache.cassandra.io;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *   http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
- * 
+ *
  */
 
 
-import org.apache.cassandra.CleanupHelper;
+import org.apache.cassandra.SchemaLoader;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
@@ -33,11 +33,11 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-public class CompactSerializerTest extends CleanupHelper
+public class CompactSerializerTest extends SchemaLoader
 {
     private static Set<String> expectedClassNames;
     private static List<String> discoveredClassNames;
-    
+
     @BeforeClass
     public static void scanClasspath()
     {
@@ -55,29 +55,38 @@ public class CompactSerializerTest extends CleanupHelper
         expectedClassNames.add("WriteResponseSerializer");
         expectedClassNames.add("EndpointStateSerializer");
         expectedClassNames.add("GossipDigestSerializer");
-        expectedClassNames.add("GossipDigestAck2MessageSerializer");
-        expectedClassNames.add("GossipDigestAckMessageSerializer");
-        expectedClassNames.add("GossipDigestSynMessageSerializer");
+        expectedClassNames.add("GossipDigestAck2Serializer");
+        expectedClassNames.add("GossipDigestAckSerializer");
+        expectedClassNames.add("GossipDigestSynSerializer");
         expectedClassNames.add("HeartBeatStateSerializer");
         expectedClassNames.add("VersionedValueSerializer");
-        expectedClassNames.add("HeaderSerializer");
-        expectedClassNames.add("MessageSerializer");
         expectedClassNames.add("PendingFileSerializer");
         expectedClassNames.add("StreamHeaderSerializer");
         expectedClassNames.add("FileStatusSerializer");
-        expectedClassNames.add("StreamRequestMessageSerializer");
+        expectedClassNames.add("StreamRequestSerializer");
         expectedClassNames.add("CounterMutationSerializer");
         expectedClassNames.add("HashableSerializer");
         expectedClassNames.add("StreamingRepairTaskSerializer");
         expectedClassNames.add("AbstractBoundsSerializer");
-        
+        expectedClassNames.add("SnapshotCommandSerializer");
+        expectedClassNames.add("RangeSliceReplySerializer");
+        expectedClassNames.add("StringSerializer");
+        expectedClassNames.add("CallbackDeterminedSerializer");
+        expectedClassNames.add("TreeRequestSerializer");
+        expectedClassNames.add("ValidatorSerializer");
+        expectedClassNames.add("MigrationsSerializer");
+        expectedClassNames.add("InnerSerializer");
+        expectedClassNames.add("LeafSerializer");
+        expectedClassNames.add("MerkleTreeSerializer");
+        expectedClassNames.add("UUIDSerializer");
+
         discoveredClassNames = new ArrayList<String>();
         String cp = System.getProperty("java.class.path");
         assert cp != null;
         String[] parts = cp.split(File.pathSeparator, -1);
-        class DirScanner 
+        class DirScanner
         {
-            void scan(File f, String ctx) 
+            void scan(File f, String ctx)
             {
                 String newCtx = ctx == null ? f.getName().equals("org") ? f.getName() : null : ctx + "." + f.getName();
                 if (f.isDirectory())
@@ -113,14 +122,14 @@ public class CompactSerializerTest extends CleanupHelper
                             cls = cls.getSuperclass();
                         }
                     }
-                    catch (ClassNotFoundException ex) 
+                    catch (ClassNotFoundException ex)
                     {
                         throw new RuntimeException(ex);
                     }
                 }
             }
         }
-        
+
         DirScanner dirScanner = new DirScanner();
         for (String cpItem : parts)
         {
@@ -129,7 +138,7 @@ public class CompactSerializerTest extends CleanupHelper
                 dirScanner.scan(f, null);
         }
     }
-    
+
     /** look for classes I expect to find. */
     @Test
     public void verifyAllSimpleNamesTest()
@@ -137,7 +146,7 @@ public class CompactSerializerTest extends CleanupHelper
         for (String clsName : expectedClassNames)
             assert discoveredClassNames.contains(clsName) : clsName + " was not discovered";
     }
-    
+
     /** look for classes I do not expect to find. */
     @Test
     public void noOthersTest()

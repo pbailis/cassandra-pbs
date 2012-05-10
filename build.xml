@@ -17,19 +17,18 @@
  ~ specific language governing permissions and limitations
  ~ under the License.
  -->
-<project basedir="." default="build" name="apache-cassandra"
+<project basedir="." default="jar" name="apache-cassandra"
          xmlns:artifact="antlib:org.apache.maven.artifact.ant">
     <property environment="env"/>
     <property file="build.properties" />
     <property file="build.properties.default" />
     <property name="debuglevel" value="source,lines,vars"/>
 
-    <!-- default version and SCM information (we need the default SCM info as people may checkout with git-svn) -->
-    <property name="base.version" value="1.1-dev"/>
-    <property name="scm.default.path" value="cassandra/branches/cassandra-1.0.0"/>
-    <property name="scm.default.connection" value="scm:svn:http://svn.apache.org/repos/asf/${scm.default.path}"/>
-    <property name="scm.default.developerConnection" value="scm:svn:https://svn.apache.org/repos/asf/${scm.default.path}"/>
-    <property name="scm.default.url" value="http://svn.apache.org/viewvc/${scm.default.path}"/>
+    <!-- default version and SCM information -->
+    <property name="base.version" value="1.2.0"/>
+    <property name="scm.connection" value="scm:git://git.apache.org/cassandra.git"/>
+    <property name="scm.developerConnection" value="scm:git://git.apache.org/cassandra.git"/>
+    <property name="scm.url" value="http://git-wip-us.apache.org/repos/asf?p=cassandra.git;a=tree"/>
 
     <!-- directory details -->
     <property name="basedir" value="."/>
@@ -104,14 +103,6 @@
 
     <condition property="is.source.artifact">
       <available file="${build.src.java}" type="dir" />
-    </condition>
-
-    <condition property="scm.provider.git-svn">
-      <available file="${basedir}/.git" type="dir"/>
-    </condition>
-
-    <condition property="scm.provider.svn">
-      <available file="${basedir}/.svn" type="dir"/>
     </condition>
 
     <tstamp>
@@ -199,13 +190,14 @@
        This generates the CQL grammar files from Cql.g
     -->
     <target name="check-gen-cql-grammar">
-      <uptodate property="cqlcurrent" 
-                srcfile="${build.src.java}/org/apache/cassandra/cql/Cql.g" 
-                targetfile="${build.src.gen-java}/org/apache/cassandra/cql/Cql.tokens"/>
+      <uptodate property="cqlcurrent">
+        <srcfiles dir="${build.src.java}" includes="org/apache/cassandra/cql*/Cql.g"/>
+        <mapper type="glob" from="*.g" to="*.tokens"/>
+      </uptodate>
     </target>
  
     <target name="gen-cql-grammar" depends="check-gen-cql-grammar" unless="cqlcurrent">
-      <echo>Building Grammar ${build.src.java}/org/apache/cassandra/cql/Cql.g  ...</echo>
+      <echo>Building Grammar ${build.src.java}/org/apache/cassandra/cql*/Cql.g  ...</echo>
       <java classname="org.antlr.Tool"
             classpath="${build.lib}/antlr-3.2.jar"
             fork="true"
@@ -213,9 +205,17 @@
          <arg value="${build.src.java}/org/apache/cassandra/cql/Cql.g" />
          <arg value="-fo" />
          <arg value="${build.src.gen-java}/org/apache/cassandra/cql/" />
-      </java> 
+      </java>
+      <java classname="org.antlr.Tool"
+            classpath="${build.lib}/antlr-3.2.jar"
+            fork="true"
+            failonerror="true">
+         <arg value="${build.src.java}/org/apache/cassandra/cql3/Cql.g" />
+         <arg value="-fo" />
+         <arg value="${build.src.gen-java}/org/apache/cassandra/cql3/" />
+      </java>
     </target>
-	
+
 	<target name="generate-cql-html" depends="maven-ant-tasks-init" description="Generate HTML from textile source">
 	  <artifact:dependencies pathId="wikitext.classpath">
 	    <dependency groupId="com.datastax.wikitext" artifactId="wikitext-core-ant" version="1.3"/>	    	  
@@ -229,31 +229,6 @@
 		</wikitext-to-html>
 	</target>
 
-    <target name="scm-svn-info" description="Determines the current Subversion URL with peg revision"
-            if="scm.provider.svn">
-      <exec executable="svn" dir="${basedir}" output="${build.dir}/svn-info.xml">
-        <arg line="info --xml"/>
-      </exec>
-      <xmlproperty file="${build.dir}/svn-info.xml" collapseAttributes="true" prefix="svn" keepRoot="false"/>
-      <echo file="${build.dir}/scm.properties">
-connection=scm:svn:${svn.entry.url}@${svn.entry.commit.revision}
-developerConnection=scm:svn:${svn.entry.url}@${svn.entry.commit.revision}
-url=${svn.entry.url}?pathrev=${svn.entry.commit.revision}
-      </echo>
-      <replace file="${build.dir}/scm.properties">
-        <replacefilter token="connection=scm:svn:https:" value="connection=scm:svn:http:"/>
-        <replacefilter token="Connection=scm:svn:http:" value="Connection=scm:svn:https:"/>
-        <replacefilter token="url=${svn.entry.repository.root}" value="url=http://svn.apache.org/viewvc"/>
-      </replace>
-      <property file="${build.dir}/scm.properties" prefix="scm"/>
-    </target>
-
-    <target name="scm-info" description="Determines the SCM details"
-            unless="scm.connection" depends="scm-svn-info">
-      <property name="scm.connection" value="${scm.default.connection}"/>
-      <property name="scm.developerConnection" value="${scm.default.developerConnection}"/>
-      <property name="scm.url" value="${scm.default.url}"/>
-    </target>
     <!--
        Fetch Maven Ant Tasks and Cassandra's dependencies
        These targets are intentionally free of dependencies so that they
@@ -328,7 +303,7 @@ url=${svn.entry.url}?pathrev=${svn.entry.commit.revision}
     <!-- this task defines the dependencies that will be fetched by Maven ANT Tasks
          the dependencies are re-used for publishing artifacts to Maven Central
          in order to keep everything consistent -->
-    <target name="maven-declare-dependencies" depends="maven-ant-tasks-init, scm-info"
+    <target name="maven-declare-dependencies" depends="maven-ant-tasks-init"
             description="Define dependencies and dependency versions">
       <!-- The parent pom defines the versions of all dependencies -->
       <artifact:pom id="parent-pom"
@@ -355,7 +330,7 @@ url=${svn.entry.url}?pathrev=${svn.entry.commit.revision}
           <dependency groupId="org.slf4j" artifactId="slf4j-log4j12" version="1.6.1"/>
           <dependency groupId="org.codehaus.jackson" artifactId="jackson-core-asl" version="1.4.0"/>
           <dependency groupId="org.codehaus.jackson" artifactId="jackson-mapper-asl" version="1.4.0"/>
-          <dependency groupId="jline" artifactId="jline" version="0.9.94">
+          <dependency groupId="jline" artifactId="jline" version="1.0">
             <exclusion groupId="junit" artifactId="junit"/>
           </dependency>
           <dependency groupId="com.googlecode.json-simple" artifactId="json-simple" version="1.1"/>
@@ -369,9 +344,7 @@ url=${svn.entry.url}?pathrev=${svn.entry.commit.revision}
             <exclusion groupId="org.apache.velocity" artifactId="velocity"/>
           </dependency>
           
-          <dependency groupId="org.apache.thrift" artifactId="libthrift" version="0.6.1">
-            <exclusion groupId="org.slf4j" artifactId="slf4j-log4j12"/>
-          </dependency>
+          <dependency groupId="org.apache.thrift" artifactId="libthrift" version="0.7.0"/>
 
           <dependency groupId="com.thoughtworks.paranamer" artifactId="paranamer-ant" version="2.1"/>
           <dependency groupId="junit" artifactId="junit" version="4.6" />
@@ -380,6 +353,7 @@ url=${svn.entry.url}?pathrev=${svn.entry.commit.revision}
              <exclusion groupId="commons-lang" artifactId="commons-lang"/>
           </dependency>
           <dependency groupId="org.apache.hadoop" artifactId="hadoop-core" version="0.20.203.0"/>
+          <dependency groupId="org.apache.pig" artifactId="pig" version="0.9.2"/>
           <dependency groupId="net.sf.jopt-simple" artifactId="jopt-simple" version="3.2"/>
           <dependency groupId="net.java.dev.jna" artifactId="jna" version="3.2.7"/>
 
@@ -392,6 +366,8 @@ url=${svn.entry.url}?pathrev=${svn.entry.commit.revision}
           <dependency groupId="log4j" artifactId="log4j" version="1.2.16" />
           <dependency groupId="org.apache.cassandra" artifactId="cassandra-all" version="${version}" />
           <dependency groupId="org.apache.cassandra" artifactId="cassandra-thrift" version="${version}" />
+          <dependency groupId="com.yammer.metrics" artifactId="metrics-core" version="2.0.3" />
+          <dependency groupId="edu.stanford.ppl" artifactId="snaptree" version="0.1" />
         </dependencyManagement>
         <developer id="alakshman" name="Avinash Lakshman"/>
         <developer id="antelder" name="Anthony Elder"/>
@@ -422,6 +398,7 @@ url=${svn.entry.url}?pathrev=${svn.entry.commit.revision}
         <dependency groupId="commons-logging" artifactId="commons-logging"/>
         <dependency groupId="org.apache.rat" artifactId="apache-rat"/>
         <dependency groupId="org.apache.hadoop" artifactId="hadoop-core"/>
+        <dependency groupId="org.apache.pig" artifactId="pig"/>
         <dependency groupId="net.sf.jopt-simple" artifactId="jopt-simple"/>
 
         <dependency groupId="net.java.dev.jna" artifactId="jna"/>
@@ -471,6 +448,8 @@ url=${svn.entry.url}?pathrev=${svn.entry.commit.revision}
         <dependency groupId="com.googlecode.json-simple" artifactId="json-simple"/>
         <dependency groupId="com.github.stephenc.high-scale-lib" artifactId="high-scale-lib"/>
         <dependency groupId="org.yaml" artifactId="snakeyaml"/>
+        <dependency groupId="edu.stanford.ppl" artifactId="snaptree"/>
+        <dependency groupId="com.yammer.metrics" artifactId="metrics-core"/>
         
         <dependency groupId="log4j" artifactId="log4j"/>
         <!-- cassandra has a hard dependency on log4j, so force slf4j's log4j provider at runtime -->
@@ -481,6 +460,7 @@ url=${svn.entry.url}?pathrev=${svn.entry.commit.revision}
         
         <!-- don't need hadoop classes to run, but if you use the hadoop stuff -->
         <dependency groupId="org.apache.hadoop" artifactId="hadoop-core" optional="true"/>
+        <dependency groupId="org.apache.pig" artifactId="pig" optional="true"/>
 
         <!-- don't need jna to run, but nice to have -->
         <dependency groupId="net.java.dev.jna" artifactId="jna" optional="true"/>
@@ -702,12 +682,34 @@ url=${svn.entry.url}?pathrev=${svn.entry.commit.revision}
         <antcall target="createVersionPropFile"/>
     </target>
 
+    <!-- Stress build file -->
+    <property name="stress.build.src" value="${basedir}/tools/stress/src" />
+    <property name="stress.build.classes" value="${build.classes}/stress" />
+	<property name="stress.manifest" value="${stress.build.classes}/MANIFEST.MF" />
+    <path id="cassandra.classes">
+        <pathelement location="${basedir}/build/classes/main" />
+        <pathelement location="${basedir}/build/classes/thrift" />
+    </path>
+    <target name="stress-build" depends="build">
+    	<mkdir dir="${stress.build.classes}" />
+        <javac destdir="${stress.build.classes}" includeantruntime="true">
+            <src path="${stress.build.src}" />
+            <classpath>
+                <path refid="cassandra.classes" />
+                <path>
+                    <fileset dir="${build.lib}">
+                        <include name="**/*.jar" />
+                    </fileset>
+                </path>
+            </classpath>
+        </javac>
+    </target>
 
     <!--
         The jar target makes cassandra.jar output.
     -->
     <target name="jar"
-            depends="maven-declare-dependencies,build, build-test"
+            depends="maven-declare-dependencies,build, build-test, stress-build"
             description="Assemble Cassandra JAR files">
       <mkdir dir="${build.classes.main}/META-INF" />
       <mkdir dir="${build.classes.thrift}/META-INF" />
@@ -769,6 +771,20 @@ url=${svn.entry.url}?pathrev=${svn.entry.commit.revision}
           <attribute name="Implementation-Vendor" value="Apache"/>
         </manifest>
       </jar>
+
+      <!-- Stress jar -->
+      <manifest file="${stress.manifest}">
+        <attribute name="Built-By" value="Pavel Yaskevich"/>
+        <attribute name="Main-Class" value="org.apache.cassandra.stress.Stress"/>
+      </manifest>
+      <mkdir dir="${stress.build.classes}/META-INF" />
+      <mkdir dir="${build.dir}/tools/lib/" />
+      <jar destfile="${build.dir}/tools/lib/stress.jar" manifest="${stress.manifest}">
+        <fileset dir="${stress.build.classes}"/>
+        <fileset dir="${basedir}/build/classes/main" />
+        <fileset dir="${basedir}/build/classes/thrift" />
+        <zipgroupfileset dir="${build.lib}" includes="*.jar" />
+      </jar>
     </target>
 
     <!--
@@ -788,17 +804,29 @@ url=${svn.entry.url}?pathrev=${svn.entry.commit.revision}
 
       <create-javadoc destdir="${javadoc.jars.dir}/main">
         <filesets>
-        <fileset dir="${build.src.java}" defaultexcludes="yes">
-          <include name="org/apache/**/*.java"/>
-        </fileset>
-        <fileset dir="${build.src.gen-java}" defaultexcludes="yes">
-          <include name="org/apache/**/*.java"/>
-        </fileset>
+          <fileset dir="${build.src.java}" defaultexcludes="yes">
+            <include name="org/apache/**/*.java"/>
+          </fileset>
+          <fileset dir="${build.src.gen-java}" defaultexcludes="yes">
+            <include name="org/apache/**/*.java"/>
+          </fileset>
         </filesets>
       </create-javadoc>
       <jar jarfile="${build.dir}/${final.name}-javadoc.jar"
            basedir="${javadoc.jars.dir}/main"/>
 
+      <create-javadoc destdir="${javadoc.jars.dir}/clientutil">
+        <filesets>
+          <fileset dir="${build.src.java}" defaultexcludes="yes">
+            <include name="org/apache/cassandra/cql/jdbc/*" />
+            <include name="org/apache/cassandra/utils/ByteBufferUtil*.java" />
+            <include name="org/apache/cassandra/utils/Hex.java" />
+            <include name="org/apache/cassandra/utils/UUIDGen*.java" />
+          </fileset>
+        </filesets>
+      </create-javadoc>
+      <jar jarfile="${build.dir}/${ant.project.name}-clientutil-${version}-javadoc.jar"
+           basedir="${javadoc.jars.dir}/clientutil"/>
       <!-- javadoc task always rebuilds so might as well remove the generated docs to prevent 
            being pulled into the distribution by accident -->
       <delete quiet="true" dir="${javadoc.jars.dir}"/>
@@ -819,6 +847,14 @@ url=${svn.entry.url}?pathrev=${svn.entry.commit.revision}
         </fileset>
         <fileset dir="${build.src.gen-java}" defaultexcludes="yes">
           <include name="org/apache/**/*.java"/>
+        </fileset>
+      </jar>
+      <jar jarfile="${build.dir}/${ant.project.name}-clientutil-${version}-sources.jar">
+        <fileset dir="${build.src.java}" defaultexcludes="yes">
+          <include name="org/apache/cassandra/cql/jdbc/*" />
+          <include name="org/apache/cassandra/utils/ByteBufferUtil*.java" />
+          <include name="org/apache/cassandra/utils/Hex.java" />
+          <include name="org/apache/cassandra/utils/UUIDGen*.java" />
         </fileset>
       </jar>
     </target>
@@ -860,7 +896,14 @@ url=${svn.entry.url}?pathrev=${svn.entry.commit.revision}
           <include name="*.txt" />
         </fileset>
       </copy>
-
+      <copy todir="${dist.dir}/tools/bin">
+        <fileset dir="${basedir}/tools/bin"/>
+      </copy>
+      <copy todir="${dist.dir}/tools/lib">
+        <fileset dir="${build.dir}/tools/lib/">
+            <include name="*.jar" />
+        </fileset>
+      </copy>
       <artifact:writepom pomRefId="dist-pom" 
             file="${build.dir}/${final.name}-dist.pom"/>
       <tar compression="gzip" longfile="gnu"
@@ -878,6 +921,7 @@ url=${svn.entry.url}?pathrev=${svn.entry.commit.revision}
         <!-- Executable scripts in bin/ -->
         <tarfileset dir="${dist.dir}" prefix="${final.name}" mode="755">
           <include name="bin/*"/>
+          <include name="tools/bin/*"/>
           <not>
                 <filename name="bin/*.in.sh" />
           </not>
@@ -1014,6 +1058,30 @@ url=${svn.entry.url}?pathrev=${svn.entry.commit.revision}
     </sequential>
   </macrodef>
 
+  <!--
+    This test target is a bit different.  It's purpose is to exercise the
+    clientutil jar in order to expose any new dependencies.  For that
+    reason we use the classes from the jar, and a carefully constructed
+    classpath which only contains what we expect users to need.
+  -->
+  <target name="test-clientutil-jar" depends="build-test,jar" description="Test clientutil jar">
+    <junit>
+      <test name="org.apache.cassandra.cql.jdbc.ClientUtilsTest" />
+      <formatter type="brief" usefile="false" />
+      <classpath>
+        <pathelement location="${test.classes}" />
+        <pathelement location="${build.dir}/${ant.project.name}-clientutil-${version}.jar" />
+
+        <fileset dir="${build.dir.lib}">
+          <include name="**/junit*.jar" />
+        </fileset>
+        <fileset dir="${build.lib}">
+          <include name="**/guava*.jar" />
+        </fileset>
+      </classpath>
+    </junit>
+  </target>
+
   <target name="test" depends="build-test" description="Execute unit tests">
     <testmacro suitename="unit" inputdir="${test.unit.src}" timeout="60000">
       <jvmarg value="-Dlegacy-sstable-root=${test.data}/legacy-sstables"/>
@@ -1050,6 +1118,12 @@ url=${svn.entry.url}?pathrev=${svn.entry.commit.revision}
     </testmacro>
   </target>
 
+  <target name="msg-ser-test-10" depends="build-test" description="Tests message serializations on 1.0 messages">
+    <testmacro suitename="unit" inputdir="${test.unit.src}" 
+               timeout="60000" filter="**/SerializationsTest.java">
+      <jvmarg value="-Dcassandra.version=1.0"/>
+    </testmacro>
+  </target>
 
   <target name="long-test" depends="build-test" description="Execute functional tests">
     <testmacro suitename="long" inputdir="${test.long.src}"
@@ -1250,6 +1324,12 @@ url=${svn.entry.url}?pathrev=${svn.entry.commit.revision}
     <!-- the cassandra-clientutil jar -->  
     <install pomFile="${build.dir}/${ant.project.name}-clientutil-${version}.pom"
              file="${build.dir}/${ant.project.name}-clientutil-${version}.jar"/>
+    <install pomFile="${build.dir}/${ant.project.name}-clientutil-${version}.pom"
+             file="${build.dir}/${ant.project.name}-clientutil-${version}-sources.jar"
+             classifier="sources"/>
+    <install pomFile="${build.dir}/${ant.project.name}-clientutil-${version}.pom"
+             file="${build.dir}/${ant.project.name}-clientutil-${version}-javadoc.jar"
+             classifier="javadoc"/>
 
     <!-- the cassandra-all jar -->
     <install pomFile="${build.dir}/${final.name}.pom"
@@ -1298,7 +1378,12 @@ url=${svn.entry.url}?pathrev=${svn.entry.commit.revision}
     <!-- the cassandra-clientutil jar -->  
     <deploy pomFile="${build.dir}/${ant.project.name}-clientutil-${version}.pom"
             file="${build.dir}/${ant.project.name}-clientutil-${version}.jar"/>
-
+    <deploy pomFile="${build.dir}/${ant.project.name}-clientutil-${version}.pom"
+             file="${build.dir}/${ant.project.name}-clientutil-${version}-sources.jar"
+             classifier="sources"/>
+    <deploy pomFile="${build.dir}/${ant.project.name}-clientutil-${version}.pom"
+             file="${build.dir}/${ant.project.name}-clientutil-${version}-javadoc.jar"
+             classifier="javadoc"/>
     <!-- the cassandra-all jar -->
     <deploy pomFile="${build.dir}/${final.name}.pom"
             file="${build.dir}/${final.name}.jar"/>
@@ -1309,5 +1394,4 @@ url=${svn.entry.url}?pathrev=${svn.entry.commit.revision}
             file="${build.dir}/${final.name}-javadoc.jar"
             classifier="javadoc"/>
   </target>
-
 </project>

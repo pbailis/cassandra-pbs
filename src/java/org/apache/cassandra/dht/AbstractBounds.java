@@ -1,6 +1,4 @@
-package org.apache.cassandra.dht;
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,18 +6,16 @@ package org.apache.cassandra.dht;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-
+package org.apache.cassandra.dht;
 
 import java.io.DataInput;
 import java.io.DataOutput;
@@ -27,6 +23,7 @@ import java.io.IOException;
 import java.io.Serializable;
 import java.util.*;
 
+import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.db.RowPosition;
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.net.MessagingService;
@@ -35,12 +32,7 @@ import org.apache.cassandra.utils.Pair;
 public abstract class AbstractBounds<T extends RingPosition> implements Serializable
 {
     private static final long serialVersionUID = 1L;
-    private static AbstractBoundsSerializer serializer = new AbstractBoundsSerializer();
-
-    public static AbstractBoundsSerializer serializer()
-    {
-        return serializer;
-    }
+    public static final AbstractBoundsSerializer serializer = new AbstractBoundsSerializer();
 
     private enum Type
     {
@@ -61,19 +53,20 @@ public abstract class AbstractBounds<T extends RingPosition> implements Serializ
     }
 
     /**
-     * Given token T and AbstractBounds ?L,R], returns Pair(?L,T], ]T,R])
-     * (where ? means that the same type of Bounds is returned -- Range or Bounds -- as the original.)
-     * The original AbstractBounds must contain the token T.
-     * If the split would cause one of the left or right side to be empty, it will be null in the result pair.
+     * Given token T and AbstractBounds ?L,R?, returns Pair(?L,T], (T,R?),
+     * where ? means that the same type of AbstractBounds is returned as the original.
+     *
+     * Put another way, returns a Pair of everything this AbstractBounds contains
+     * up to and including the split position, and everything it contains after
+     * (not including the split position).
+     *
+     * The original AbstractBounds must either contain the position T, or T
+     * should be equals to the left bound L.
+     *
+     * If the split would only yield the same AbstractBound, null is returned
+     * instead.
      */
-    public Pair<AbstractBounds<T>,AbstractBounds<T>> split(T pos)
-    {
-        assert left.equals(pos) || contains(pos);
-        AbstractBounds<T> lb = createFrom(pos);
-        // we contain this token, so only one of the left or right can be empty
-        AbstractBounds<T> rb = lb != null && pos.equals(right) ? null : new Range<T>(pos, right);
-        return new Pair<AbstractBounds<T>,AbstractBounds<T>>(lb, rb);
-    }
+    public abstract Pair<AbstractBounds<T>, AbstractBounds<T>> split(T position);
 
     @Override
     public int hashCode()
@@ -81,89 +74,20 @@ public abstract class AbstractBounds<T extends RingPosition> implements Serializ
         return 31 * left.hashCode() + right.hashCode();
     }
 
+    /** return true if @param range intersects any of the given @param ranges */
+    public boolean intersects(Iterable<Range<T>> ranges)
+    {
+        for (Range<T> range2 : ranges)
+        {
+            if (range2.intersects(this))
+                return true;
+        }
+        return false;
+    }
+
     public abstract boolean contains(T start);
 
-    /** @return A clone of this AbstractBounds with a new right T, or null if an identical range would be created. */
-    public abstract AbstractBounds<T> createFrom(T right);
-
     public abstract List<? extends AbstractBounds<T>> unwrap();
-
-    /**
-     * @return A copy of the given list of with all bounds unwrapped, sorted by bound.left and with overlapping bounds merged.
-     * This method does not allow allow to mix Range and Bound in the input list.
-     */
-    public static <T extends RingPosition> List<AbstractBounds<T>> normalize(Collection<? extends AbstractBounds<T>> bounds)
-    {
-        // unwrap all
-        List<AbstractBounds<T>> output = new ArrayList<AbstractBounds<T>>();
-        for (AbstractBounds<T> bound : bounds)
-            output.addAll(bound.unwrap());
-
-        // sort by left
-        Collections.sort(output, new Comparator<AbstractBounds<T>>()
-        {
-            public int compare(AbstractBounds<T> b1, AbstractBounds<T> b2)
-            {
-                return b1.left.compareTo(b2.left);
-            }
-        });
-
-        // deoverlap
-        return deoverlap(output);
-    }
-
-    /**
-     * Given a list of unwrapped bounds sorted by left token, return a list a equivalent
-     * list of bounds but with no overlapping bounds.
-     */
-    private static <T extends RingPosition> List<AbstractBounds<T>> deoverlap(List<AbstractBounds<T>> bounds)
-    {
-        if (bounds.isEmpty())
-            return bounds;
-
-        List<AbstractBounds<T>> output = new ArrayList<AbstractBounds<T>>();
-
-        Iterator<AbstractBounds<T>> iter = bounds.iterator();
-        AbstractBounds<T> current = iter.next();
-        boolean isRange = current instanceof Range;
-
-        T min = (T) current.partitioner.minValue(current.left.getClass());
-        while (iter.hasNext())
-        {
-            if (current.right.equals(min))
-            {
-                // If one of the bound is the full range, we return only that
-                if (current.left.equals(min))
-                    return Collections.<AbstractBounds<T>>singletonList(current);
-
-                output.add(current.createFrom(min));
-                return output;
-            }
-
-            AbstractBounds<T> next = iter.next();
-            assert isRange ? next instanceof Range : next instanceof Bounds;
-
-            // For Ranges, if next left is equal to current right, we do not intersect per se, but replacing (A, B] and (B, C] by (A, C] is
-            // legit, and since this actually avoid special casing and will result in more "optimal" ranges, we do this transformation
-            if (next.left.compareTo(current.right) <= 0)
-            {
-                // We do overlap
-                // (we've handler current.right.equals(min) already)
-                T newRight = next.right.equals(min) || current.right.compareTo(next.right) < 0 ? next.right : current.right;
-                current = current.createFrom(newRight);
-                if (current == null)
-                    // current is the full ring, can only happen for Range
-                    return Collections.<AbstractBounds<T>>singletonList(new Range<T>(min, min));
-            }
-            else
-            {
-                output.add(current);
-                current = next;
-            }
-        }
-        output.add(current);
-        return output;
-    }
 
     /**
      * Transform this abstract bounds to equivalent covering bounds of row positions.
@@ -190,21 +114,25 @@ public abstract class AbstractBounds<T extends RingPosition> implements Serializ
              * The first int tells us if it's a range or bounds (depending on the value) _and_ if it's tokens or keys (depending on the
              * sign). We use negative kind for keys so as to preserve the serialization of token from older version.
              */
-            boolean isToken = range.left instanceof Token;
-            int kind = range instanceof Range ? Type.RANGE.ordinal() : Type.BOUNDS.ordinal();
-            if (!isToken)
-                kind = -(kind+1);
-            out.writeInt(kind);
-            if (isToken)
+            out.writeInt(kindInt(range));
+            if (range.left instanceof Token)
             {
-                Token.serializer().serialize((Token)range.left, out);
-                Token.serializer().serialize((Token)range.right, out);
+                Token.serializer.serialize((Token) range.left, out);
+                Token.serializer.serialize((Token) range.right, out);
             }
             else
             {
-                RowPosition.serializer().serialize((RowPosition)range.left, out);
-                RowPosition.serializer().serialize((RowPosition)range.right, out);
+                RowPosition.serializer.serialize((RowPosition) range.left, out);
+                RowPosition.serializer.serialize((RowPosition) range.right, out);
             }
+        }
+
+        private int kindInt(AbstractBounds<?> ab)
+        {
+            int kind = ab instanceof Range ? Type.RANGE.ordinal() : Type.BOUNDS.ordinal();
+            if (!(ab.left instanceof Token))
+                kind = -(kind + 1);
+            return kind;
         }
 
         public AbstractBounds<?> deserialize(DataInput in, int version) throws IOException
@@ -217,13 +145,13 @@ public abstract class AbstractBounds<T extends RingPosition> implements Serializ
             RingPosition left, right;
             if (isToken)
             {
-                left = Token.serializer().deserialize(in);
-                right = Token.serializer().deserialize(in);
+                left = Token.serializer.deserialize(in);
+                right = Token.serializer.deserialize(in);
             }
             else
             {
-                left = RowPosition.serializer().deserialize(in);
-                right = RowPosition.serializer().deserialize(in);
+                left = RowPosition.serializer.deserialize(in);
+                right = RowPosition.serializer.deserialize(in);
             }
 
             if (kind == Type.RANGE.ordinal())
@@ -231,9 +159,20 @@ public abstract class AbstractBounds<T extends RingPosition> implements Serializ
             return new Bounds(left, right);
         }
 
-        public long serializedSize(AbstractBounds<?> abstractBounds, int version)
+        public long serializedSize(AbstractBounds<?> ab, int version)
         {
-            throw new UnsupportedOperationException();
+            int size = TypeSizes.NATIVE.sizeof(kindInt(ab));
+            if (ab.left instanceof Token)
+            {
+                size += Token.serializer.serializedSize((Token) ab.left, TypeSizes.NATIVE);
+                size += Token.serializer.serializedSize((Token) ab.right, TypeSizes.NATIVE);
+            }
+            else
+            {
+                size += RowPosition.serializer.serializedSize((RowPosition) ab.left, TypeSizes.NATIVE);
+                size += RowPosition.serializer.serializedSize((RowPosition) ab.right, TypeSizes.NATIVE);
+            }
+            return size;
         }
     }
 }

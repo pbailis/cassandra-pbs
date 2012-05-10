@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.service;
 
 import java.util.concurrent.TimeUnit;
@@ -27,7 +26,7 @@ import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.net.IAsyncCallback;
-import org.apache.cassandra.net.Message;
+import org.apache.cassandra.net.MessageIn;
 import org.apache.cassandra.utils.SimpleCondition;
 
 public class TruncateResponseHandler implements IAsyncCallback
@@ -35,7 +34,7 @@ public class TruncateResponseHandler implements IAsyncCallback
     protected static final Logger logger = LoggerFactory.getLogger(TruncateResponseHandler.class);
     protected final SimpleCondition condition = new SimpleCondition();
     private final int responseCount;
-    protected AtomicInteger responses = new AtomicInteger(0);
+    protected final AtomicInteger responses = new AtomicInteger(0);
     private final long startTime;
 
     public TruncateResponseHandler(int responseCount)
@@ -67,7 +66,7 @@ public class TruncateResponseHandler implements IAsyncCallback
         }
     }
 
-    public void response(Message message)
+    public void response(MessageIn message)
     {
         responses.incrementAndGet();
         if (responses.get() >= responseCount)

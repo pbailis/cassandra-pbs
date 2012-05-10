@@ -1,21 +1,20 @@
 /*
-* Licensed to the Apache Software Foundation (ASF) under one
-* or more contributor license agreements.  See the NOTICE file
-* distributed with this work for additional information
-* regarding copyright ownership.  The ASF licenses this file
-* to you under the Apache License, Version 2.0 (the
-* "License"); you may not use this file except in compliance
-* with the License.  You may obtain a copy of the License at
-*
-*    http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing,
-* software distributed under the License is distributed on an
-* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-* KIND, either express or implied.  See the License for the
-* specific language governing permissions and limitations
-* under the License.
-*/
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.apache.cassandra.utils;
 
 import java.io.DataInput;
@@ -26,11 +25,12 @@ import java.util.concurrent.atomic.AtomicLongArray;
 
 import com.google.common.base.Objects;
 
+import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.io.ISerializer;
 
 public class EstimatedHistogram
 {
-    public static EstimatedHistogramSerializer serializer = new EstimatedHistogramSerializer();
+    public static final EstimatedHistogramSerializer serializer = new EstimatedHistogramSerializer();
 
     /**
      * The series of values to which the counts in `buckets` correspond:
@@ -162,6 +162,31 @@ public class EstimatedHistogram
     }
 
     /**
+     * @param percentile
+     * @return estimated value at given percentile
+     */
+    public long percentile(double percentile)
+    {
+        assert percentile >= 0 && percentile <= 1.0;
+        int lastBucket = buckets.length() - 1;
+        if (buckets.get(lastBucket) > 0)
+            throw new IllegalStateException("Unable to compute when histogram overflowed");
+
+        long pcount = (long) Math.floor(count() * percentile);
+        if (pcount == 0)
+            return 0;
+
+        long elements = 0;
+        for (int i = 0; i < lastBucket; i++)
+        {
+            elements += buckets.get(i);
+            if (elements >= pcount)
+                return bucketOffsets[i];
+        }
+        return 0;
+    }
+
+    /**
      * @return the mean histogram value (average of bucket offsets, weighted by count)
      * @throws IllegalStateException if any values were greater than the largest bucket threshold
      */
@@ -188,7 +213,7 @@ public class EstimatedHistogram
     public long count()
     {
        long sum = 0L;
-       for (int i = 0; i < buckets.length(); i++) 
+       for (int i = 0; i < buckets.length(); i++)
            sum += buckets.get(i);
        return sum;
     }
@@ -206,10 +231,10 @@ public class EstimatedHistogram
     {
         if (this == o)
             return true;
-        
+
         if (!(o instanceof EstimatedHistogram))
             return false;
-        
+
         EstimatedHistogram that = (EstimatedHistogram) o;
         return Arrays.equals(getBucketOffsets(), that.getBucketOffsets()) &&
                Arrays.equals(getBuckets(false), that.getBuckets(false));
@@ -248,7 +273,7 @@ public class EstimatedHistogram
             return new EstimatedHistogram(offsets, buckets);
         }
 
-        public long serializedSize(EstimatedHistogram object)
+        public long serializedSize(EstimatedHistogram object, TypeSizes typeSizes)
         {
             throw new UnsupportedOperationException();
         }

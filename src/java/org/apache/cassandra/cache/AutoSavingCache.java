@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -7,14 +7,13 @@
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.apache.cassandra.cache;
 
@@ -39,7 +38,6 @@ import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.io.util.SequentialWriter;
 import org.apache.cassandra.service.CacheService;
 import org.apache.cassandra.service.StorageService;
-import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.WrappedRunnable;
 import org.apache.cassandra.utils.Pair;
 
@@ -52,7 +50,7 @@ public class AutoSavingCache<K extends CacheKey, V> extends InstrumentingCache<K
 
     protected volatile ScheduledFuture<?> saveTask;
     protected final CacheService.CacheType cacheType;
-    
+
     public AutoSavingCache(ICache<K, V> cache, CacheService.CacheType cacheType)
     {
         super(cache);
@@ -237,9 +235,8 @@ public class AutoSavingCache<K extends CacheKey, V> extends InstrumentingCache<K
                         writers.put(path, writer);
                     }
 
-                    ByteBuffer bytes = key.serializeForStorage();
-                    ByteBufferUtil.writeWithLength(bytes, writer.stream);
-                    bytesWritten += bytes.remaining();
+                    key.write(writer.stream);
+                    bytesWritten += key.serializedSize();
                 }
             }
             finally

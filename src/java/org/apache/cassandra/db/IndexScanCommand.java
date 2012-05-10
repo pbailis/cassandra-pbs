@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -6,43 +6,38 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-
 package org.apache.cassandra.db;
 
-import java.io.*;
-import java.util.Arrays;
+import java.io.DataInput;
+import java.io.DataInputStream;
+import java.io.DataOutput;
+import java.io.IOException;
 
 import org.apache.cassandra.dht.AbstractBounds;
-import org.apache.cassandra.dht.Bounds;
-import org.apache.cassandra.dht.Token;
-import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.io.IVersionedSerializer;
-import org.apache.cassandra.io.util.DataOutputBuffer;
 import org.apache.cassandra.io.util.FastByteArrayInputStream;
-import org.apache.cassandra.net.Message;
+import org.apache.cassandra.net.MessageIn;
+import org.apache.cassandra.net.MessageOut;
 import org.apache.cassandra.net.MessagingService;
-import org.apache.cassandra.net.MessageProducer;
-import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.thrift.IndexClause;
 import org.apache.cassandra.thrift.SlicePredicate;
+import org.apache.cassandra.thrift.TBinaryProtocol;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.thrift.TDeserializer;
 import org.apache.thrift.TSerializer;
-import org.apache.cassandra.thrift.TBinaryProtocol;
 
-public class IndexScanCommand implements MessageProducer
+public class IndexScanCommand
 {
-    private static final IndexScanCommandSerializer serializer = new IndexScanCommandSerializer();
+    public static final IndexScanCommandSerializer serializer = new IndexScanCommandSerializer();
 
     public final String keyspace;
     public final String column_family;
@@ -60,28 +55,9 @@ public class IndexScanCommand implements MessageProducer
         this.range = range;
     }
 
-    public Message getMessage(Integer version)
+    public MessageOut<IndexScanCommand> createMessage()
     {
-        DataOutputBuffer dob = new DataOutputBuffer();
-        try
-        {
-            serializer.serialize(this, dob, version);
-        }
-        catch (IOException e)
-        {
-            throw new IOError(e);
-        }
-        return new Message(FBUtilities.getBroadcastAddress(),
-                           StorageService.Verb.INDEX_SCAN,
-                           Arrays.copyOf(dob.getData(), dob.getLength()),
-                           version);
-    }
-
-    public static IndexScanCommand read(Message message) throws IOException
-    {
-        byte[] bytes = message.getMessageBody();
-        FastByteArrayInputStream bis = new FastByteArrayInputStream(bytes);
-        return serializer.deserialize(new DataInputStream(bis), message.getVersion());
+        return new MessageOut<IndexScanCommand>(MessagingService.Verb.INDEX_SCAN, this, serializer);
     }
 
     private static class IndexScanCommandSerializer implements IVersionedSerializer<IndexScanCommand>
@@ -93,7 +69,7 @@ public class IndexScanCommand implements MessageProducer
             TSerializer ser = new TSerializer(new TBinaryProtocol.Factory());
             FBUtilities.serialize(ser, o.index_clause, out);
             FBUtilities.serialize(ser, o.predicate, out);
-            AbstractBounds.serializer().serialize(o.range, out, version);
+            AbstractBounds.serializer.serialize(o.range, out, version);
         }
 
         public IndexScanCommand deserialize(DataInput in, int version) throws IOException
@@ -106,7 +82,7 @@ public class IndexScanCommand implements MessageProducer
             FBUtilities.deserialize(dser, indexClause, in);
             SlicePredicate predicate = new SlicePredicate();
             FBUtilities.deserialize(dser, predicate, in);
-            AbstractBounds<RowPosition> range = AbstractBounds.serializer().deserialize(in, version).toRowBounds();
+            AbstractBounds<RowPosition> range = AbstractBounds.serializer.deserialize(in, version).toRowBounds();
             return new IndexScanCommand(keyspace, columnFamily, indexClause, predicate, range);
         }
 

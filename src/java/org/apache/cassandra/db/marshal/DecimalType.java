@@ -1,6 +1,4 @@
-package org.apache.cassandra.db.marshal;
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,20 +6,18 @@ package org.apache.cassandra.db.marshal;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+package org.apache.cassandra.db.marshal;
 
 import java.math.BigDecimal;
-import java.math.BigInteger;
 import java.nio.ByteBuffer;
 
 import org.apache.cassandra.cql.jdbc.JdbcDecimal;
@@ -31,7 +27,7 @@ public class DecimalType extends AbstractType<BigDecimal>
 {
     public static final DecimalType instance = new DecimalType();
 
-    DecimalType() {} // singleton    
+    DecimalType() {} // singleton
 
     public int compare(ByteBuffer bb0, ByteBuffer bb1)
     {
@@ -43,7 +39,7 @@ public class DecimalType extends AbstractType<BigDecimal>
         {
             return 1;
         }
-        
+
         return compose(bb0).compareTo(compose(bb1));
     }
 
@@ -58,18 +54,7 @@ public class DecimalType extends AbstractType<BigDecimal>
      */
     public ByteBuffer decompose(BigDecimal value)
     {
-        if (value == null) return ByteBufferUtil.EMPTY_BYTE_BUFFER;
-        
-        BigInteger bi = value.unscaledValue();
-        Integer scale = value.scale();
-        byte[] bibytes = bi.toByteArray();
-        byte[] sbytes = ByteBufferUtil.bytes(scale).array();
-        byte[] bytes = new byte[bi.toByteArray().length+4];
-        
-        for (int i = 0 ; i < 4 ; i++) bytes[i] = sbytes[i];
-        for (int i = 4 ; i < bibytes.length+4 ; i++) bytes[i] = bibytes[i-4];
-        
-        return ByteBuffer.wrap(bytes);
+        return JdbcDecimal.instance.decompose(value);
     }
 
     public String getString(ByteBuffer bytes)
@@ -81,7 +66,7 @@ public class DecimalType extends AbstractType<BigDecimal>
     {
         // Return an empty ByteBuffer for an empty string.
         if (source.isEmpty()) return ByteBufferUtil.EMPTY_BYTE_BUFFER;
-        
+
         BigDecimal decimal;
 
         try

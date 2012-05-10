@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -31,7 +31,6 @@ import org.apache.cassandra.dht.AbstractBounds;
 import org.apache.cassandra.dht.LocalToken;
 import org.apache.cassandra.io.sstable.ReducingKeyIterator;
 import org.apache.cassandra.io.sstable.SSTableReader;
-import org.apache.cassandra.thrift.IndexClause;
 import org.apache.cassandra.thrift.IndexExpression;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.commons.lang.StringUtils;
@@ -50,16 +49,16 @@ public class SecondaryIndexManager
      * Organizes the indexes by column name
      */
     private final ConcurrentNavigableMap<ByteBuffer, SecondaryIndex> indexesByColumn;
-    
-    
+
+
     /**
      * Keeps a single instance of a SecondaryIndex for many columns when the index type
      * has isRowLevelIndex() == true
-     * 
+     *
      * This allows updates to happen to an entire row at once
      */
     private final Map<Class<? extends SecondaryIndex>,SecondaryIndex> rowLevelIndexMap;
-    
+
 
     /**
      * The underlying column family containing the source data for these indexes
@@ -70,13 +69,13 @@ public class SecondaryIndexManager
     {
         indexesByColumn = new ConcurrentSkipListMap<ByteBuffer, SecondaryIndex>();
         rowLevelIndexMap = new HashMap<Class<? extends SecondaryIndex>, SecondaryIndex>();
-        
+
         this.baseCfs = baseCfs;
     }
 
     /**
      * Drops and adds new indexes associated with the underlying CF
-     * @throws IOException 
+     * @throws IOException
      */
     public void reload() throws IOException
     {
@@ -94,9 +93,15 @@ public class SecondaryIndexManager
         for (ColumnDefinition cdef : baseCfs.metadata.getColumn_metadata().values())
             if (cdef.getIndexType() != null && !indexedColumnNames.contains(cdef.name))
                 addIndexedColumn(cdef);
+
+        for (ColumnFamilyStore cfs : getIndexesBackedByCfs())
+        {
+            cfs.metadata.reloadSecondaryIndexMetadata(baseCfs.metadata);
+            cfs.reload();
+        }
     }
-    
-    
+
+
     /**
      * Does a full, blocking rebuild of the indexes specified by columns from the sstables.
      * Does nothing if columns is empty.
@@ -104,8 +109,8 @@ public class SecondaryIndexManager
      * Caller must acquire and release references to the sstables used here.
      *
      * @param sstables the data to build from
-     * @param columns the list of columns to index
-     * @throws IOException 
+     * @param columns the list of columns to index, ordered by comparator
+     * @throws IOException
      */
     public void maybeBuildSecondaryIndexes(Collection<SSTableReader> sstables, SortedSet<ByteBuffer> columns) throws IOException
     {
@@ -143,17 +148,37 @@ public class SecondaryIndexManager
     }
 
     /**
+     * @return true if the indexes can handle the clause.
+     */
+    public boolean hasIndexFor(List<IndexExpression> clause)
+    {
+        if (clause == null || clause.isEmpty())
+            return false;
+
+        // It doesn't seem a clause can have multiple searchers, but since
+        // getIndexSearchersForQuery returns a list ...
+        List<SecondaryIndexSearcher> searchers = getIndexSearchersForQuery(clause);
+        if (searchers.isEmpty())
+            return false;
+
+        for (SecondaryIndexSearcher searcher : searchers)
+            if (!searcher.isIndexing(clause))
+                return false;
+        return true;
+    }
+
+    /**
      * Removes a existing index
      * @param column the indexed column to remove
-     * @throws IOException 
+     * @throws IOException
      */
     public void removeIndexedColumn(ByteBuffer column) throws IOException
     {
         SecondaryIndex index = indexesByColumn.remove(column);
-        
+
         if (index == null)
             return;
-        
+
         // Remove this column from from row level index map
         if (index instanceof PerRowSecondaryIndex)
         {
@@ -175,13 +200,13 @@ public class SecondaryIndexManager
      */
     public synchronized Future<?> addIndexedColumn(ColumnDefinition cdef)
     {
-        
+
         if (indexesByColumn.containsKey(cdef.name))
             return null;
-        
+
         assert cdef.getIndexType() != null;
         logger.info("Creating new index : {}",cdef);
-        
+
         SecondaryIndex index;
         try
         {
@@ -189,14 +214,14 @@ public class SecondaryIndexManager
         } catch (ConfigurationException e)
         {
             throw new RuntimeException(e);
-        }      
-        
+        }
+
         // Keep a single instance of the index per-cf for row level indexes
         // since we want all columns to be under the index
         if (index instanceof PerRowSecondaryIndex)
         {
             SecondaryIndex currentIndex = rowLevelIndexMap.get(index.getClass());
-            
+
             if (currentIndex == null)
             {
                 rowLevelIndexMap.put(index.getClass(), index);
@@ -206,20 +231,20 @@ public class SecondaryIndexManager
             {
                 index = currentIndex;
                 index.addColumnDef(cdef);
-            }         
+            }
         }
         else
         {
             index.init();
         }
-             
+
         // link in indexedColumns. this means that writes will add new data to
         // the index immediately,
         // so we don't have to lock everything while we do the build. it's up to
         // the operator to wait
         // until the index is actually built before using in queries.
         indexesByColumn.put(cdef.name, index);
-        
+
         // if we're just linking in the index to indexedColumns on an
         // already-built index post-restart, we're done
         if (index.isIndexBuilt(cdef.name))
@@ -229,7 +254,7 @@ public class SecondaryIndexManager
     }
 
     /**
-     * 
+     *
      * @param column the name of indexes column
      * @return the index
      */
@@ -257,39 +282,49 @@ public class SecondaryIndexManager
         for (Map.Entry<ByteBuffer, SecondaryIndex> entry : indexesByColumn.entrySet())
             entry.getValue().forceBlockingFlush();
     }
-    
+
     /**
      * Returns the decoratedKey for a column value
      * @param name column name
      * @param value column value
      * @return decorated key
      */
-    public DecoratedKey<LocalToken> getIndexKeyFor(ByteBuffer name, ByteBuffer value)
+    public DecoratedKey getIndexKeyFor(ByteBuffer name, ByteBuffer value)
     {
-        return new DecoratedKey<LocalToken>(new LocalToken(baseCfs.metadata.getColumnDefinition(name).getValidator(), value), value);
+        return new DecoratedKey(new LocalToken(baseCfs.metadata.getColumnDefinition(name).getValidator(), value), value);
     }
-    
-    
+
+
     /**
      * @return all built indexes (ready to use)
      */
     public List<String> getBuiltIndexes()
     {
         List<String> indexList = new ArrayList<String>();
-        
+
         for (Map.Entry<ByteBuffer, SecondaryIndex> entry : indexesByColumn.entrySet())
         {
             SecondaryIndex index = entry.getValue();
-            
-            if (index.isIndexBuilt(entry.getKey())) 
+
+            if (index.isIndexBuilt(entry.getKey()))
             {
                 indexList.add(entry.getValue().getIndexName());
             }
         }
-        
+
         return indexList;
     }
-    
+
+    public ByteBuffer getColumnByIdxName(String idxName)
+    {
+        for (Map.Entry<ByteBuffer, SecondaryIndex> entry : indexesByColumn.entrySet())
+        {
+            if (entry.getValue().getIndexName().equals(idxName))
+                return entry.getKey();
+        }
+        throw new RuntimeException("Unknown Index Name: " + idxName);
+    }
+
     /**
      * @return all CFS from indexes which use a backing CFS internally (KEYS)
      */
@@ -300,14 +335,14 @@ public class SecondaryIndexManager
         for (Map.Entry<ByteBuffer, SecondaryIndex> entry : indexesByColumn.entrySet())
         {
             ColumnFamilyStore cfs = entry.getValue().getIndexCfs();
-            
+
             if (cfs != null)
-                cfsList.add(cfs);        
+                cfsList.add(cfs);
         }
-        
+
         return cfsList;
     }
-        
+
     /**
      * @return all indexes which do *not* use a backing CFS internally
      */
@@ -320,21 +355,35 @@ public class SecondaryIndexManager
         for (Map.Entry<ByteBuffer, SecondaryIndex> entry : indexesByColumn.entrySet())
         {
             ColumnFamilyStore cfs = entry.getValue().getIndexCfs();
-            
+
             if (cfs == null)
-                indexList.put(entry.getValue(), null);        
+                indexList.put(entry.getValue(), null);
         }
-        
+
         return indexList.keySet();
     }
-    
+
+    /**
+     * @return all of the secondary indexes without distinction to the (non-)backed by secondary ColumnFamilyStore.
+     */
+    public Collection<SecondaryIndex> getIndexes()
+    {
+        // we use identity map because per row indexes use same instance across many columns
+        IdentityHashMap<SecondaryIndex, Object> indexList = new IdentityHashMap<SecondaryIndex, Object>();
+
+        for (Map.Entry<ByteBuffer, SecondaryIndex> entry : indexesByColumn.entrySet())
+            indexList.put(entry.getValue(), null);
+
+        return indexList.keySet();
+    }
+
     /**
      * @return total current ram size of all indexes
      */
     public long getTotalLiveSize()
     {
         long total = 0;
-        
+
         // we use identity map because per row indexes use same instance
         // across many columns
         IdentityHashMap<SecondaryIndex, Object> indexList = new IdentityHashMap<SecondaryIndex, Object>();
@@ -342,77 +391,77 @@ public class SecondaryIndexManager
         for (Map.Entry<ByteBuffer, SecondaryIndex> entry : indexesByColumn.entrySet())
         {
             SecondaryIndex index = entry.getValue();
-            
+
             if (indexList.put(index, index) == null)
                 total += index.getLiveSize();
         }
-        
+
         return total;
     }
-    
+
     /**
      * Removes obsolete index entries and creates new ones for the given row key
      * and mutated columns.
-     * 
+     *
      * For columns whos underlying index type has the isRowLevelIndex() flag set to true this function will
-     * call the 
-     * 
+     * call the
+     *
      * @param rowKey the row key
      * @param cf the current rows data
      * @param mutatedIndexedColumns the set of columns that were changed or added
      * @param oldIndexedColumns the columns what were deleted
-     * @throws IOException 
+     * @throws IOException
      */
     public void applyIndexUpdates(ByteBuffer rowKey,
                                   ColumnFamily cf,
                                   SortedSet<ByteBuffer> mutatedIndexedColumns,
                                   ColumnFamily oldIndexedColumns) throws IOException
     {
-        
+
         // Identify the columns with PerRowSecondaryIndexes
         // we need to make sure this is only called once
-        Set<Class<? extends SecondaryIndex>> appliedRowLevelIndexes = null;       
-      
+        Set<Class<? extends SecondaryIndex>> appliedRowLevelIndexes = null;
+
         // remove the old index entries
         if (oldIndexedColumns != null)
         {
             for (ByteBuffer columnName : oldIndexedColumns.getColumnNames())
             {
-                
+
                 IColumn column = oldIndexedColumns.getColumn(columnName);
-                
+
                 if (column == null)
                     continue;
-                
+
                 //this was previously deleted so should not be in index
                 if (column.isMarkedForDelete())
-                    continue;              
-                
+                    continue;
+
                 SecondaryIndex index = getIndexForColumn(columnName);
                 if (index == null)
                 {
                     logger.debug("Looks like index got dropped mid-update.  Skipping");
                     continue;
                 }
-                
+
                 // Update entire row if we encounter a row level index
                 if (index instanceof PerRowSecondaryIndex)
                 {
                     if (appliedRowLevelIndexes == null)
                         appliedRowLevelIndexes = new HashSet<Class<? extends SecondaryIndex>>();
-                    
+
                     if (appliedRowLevelIndexes.add(index.getClass()))
                         ((PerRowSecondaryIndex)index).applyIndexUpdates(rowKey, cf, mutatedIndexedColumns, oldIndexedColumns);
                 }
                 else
                 {
-                    DecoratedKey<LocalToken> valueKey = getIndexKeyFor(columnName, column.value());
+                    DecoratedKey valueKey = getIndexKeyFor(columnName, column.value());
 
                     ((PerColumnSecondaryIndex)index).deleteColumn(valueKey, rowKey, column);
                 }
             }
         }
-        
+
         //insert new columns
         for (ByteBuffer columnName : mutatedIndexedColumns)
         {
@@ -432,117 +481,129 @@ public class SecondaryIndexManager
             {
                 if (appliedRowLevelIndexes == null)
                     appliedRowLevelIndexes = new HashSet<Class<? extends SecondaryIndex>>();
-                
+
                 if (appliedRowLevelIndexes.add(index.getClass()))
                     ((PerRowSecondaryIndex)index).applyIndexUpdates(rowKey, cf, mutatedIndexedColumns, oldIndexedColumns);
             }
             else
             {
-                DecoratedKey<LocalToken> valueKey = getIndexKeyFor(columnName, column.value());
-                
-                ((PerColumnSecondaryIndex)index).insertColumn(valueKey, rowKey, column);         
+                DecoratedKey valueKey = getIndexKeyFor(columnName, column.value());
+
+                ((PerColumnSecondaryIndex)index).insertColumn(valueKey, rowKey, column);
             }
         }
     }
-    
+
     /**
      * Delete all columns from all indexes for this row
      * @param key the row key
      * @param indexedColumnsInRow all column names in row
      */
-    public void deleteFromIndexes(DecoratedKey<?> key, List<IColumn> indexedColumnsInRow) throws IOException
+    public void deleteFromIndexes(DecoratedKey key, List<IColumn> indexedColumnsInRow) throws IOException
     {
-        
-        // Identify the columns with isRowLevelIndex == true 
+
+        // Identify the columns with isRowLevelIndex == true
         // we need to make sure this is only called once
-        Set<Class<? extends SecondaryIndex>> cleanedRowLevelIndexes = null;       
-        
+        Set<Class<? extends SecondaryIndex>> cleanedRowLevelIndexes = null;
+
         for (IColumn column : indexedColumnsInRow)
         {
             SecondaryIndex index = indexesByColumn.get(column.name());
-            
+
             if (index == null)
                 continue;
-            
+
             //Update entire row if we encounter a row level index
             if (index instanceof PerRowSecondaryIndex)
             {
                 if (cleanedRowLevelIndexes == null)
                     cleanedRowLevelIndexes = new HashSet<Class<? extends SecondaryIndex>>();
-                
+
                 if (cleanedRowLevelIndexes.add(index.getClass()))
-                    ((PerRowSecondaryIndex)index).deleteFromIndex(key, indexedColumnsInRow);             
+                    ((PerRowSecondaryIndex)index).deleteFromIndex(key, indexedColumnsInRow);
             }
             else
             {
-                DecoratedKey<LocalToken> valueKey = getIndexKeyFor(column.name(), column.value());
+                DecoratedKey valueKey = getIndexKeyFor(column.name(), column.value());
                 ((PerColumnSecondaryIndex) index).deleteColumn(valueKey, key.key, column);
             }
-        }       
+        }
     }
-    
-    
+
+
     /**
      * Get a list of IndexSearchers from the union of expression index types
      * @param clause the query clause
-     * @return the searchers to needed to query the index
+     * @return the searchers needed to query the index
      */
-    private List<SecondaryIndexSearcher> getIndexSearchersForQuery(IndexClause clause)
+    private List<SecondaryIndexSearcher> getIndexSearchersForQuery(List<IndexExpression> clause)
     {
-        List<SecondaryIndexSearcher> indexSearchers = new ArrayList<SecondaryIndexSearcher>();
-        
         Map<String, Set<ByteBuffer>> groupByIndexType = new HashMap<String, Set<ByteBuffer>>();
- 
-        
+
+
         //Group columns by type
-        for (IndexExpression ix : clause.expressions)
+        for (IndexExpression ix : clause)
         {
             SecondaryIndex index = getIndexForColumn(ix.column_name);
-            
+
             if (index == null)
                 continue;
-            
+
             Set<ByteBuffer> columns = groupByIndexType.get(index.getClass().getCanonicalName());
-            
+
             if (columns == null)
             {
                 columns = new HashSet<ByteBuffer>();
                 groupByIndexType.put(index.getClass().getCanonicalName(), columns);
             }
-            
-            columns.add(ix.column_name);        
+
+            columns.add(ix.column_name);
         }
-        
+
+        List<SecondaryIndexSearcher> indexSearchers = new ArrayList<SecondaryIndexSearcher>(groupByIndexType.size());
+
         //create searcher per type
         for (Map.Entry<String, Set<ByteBuffer>> entry : groupByIndexType.entrySet())
         {
             indexSearchers.add( getIndexForColumn(entry.getValue().iterator().next()).createSecondaryIndexSearcher(entry.getValue()) );
         }
-        
+
         return indexSearchers;
     }
-    
+
     /**
      * Performs a search across a number of column indexes
      * TODO: add support for querying across index types
-     * 
+     *
      * @param clause the index query clause
      * @param range the row range to restrict to
      * @param dataFilter the column range to restrict to
      * @return found indexed rows
      */
-    public List<Row> search(IndexClause clause, AbstractBounds<RowPosition> range, IFilter dataFilter)
+    public List<Row> search(List<IndexExpression> clause, AbstractBounds<RowPosition> range, int maxResults, IFilter dataFilter, boolean maxIsColumns)
     {
         List<SecondaryIndexSearcher> indexSearchers = getIndexSearchersForQuery(clause);
-               
+
         if (indexSearchers.isEmpty())
             return Collections.emptyList();
-       
+
         //We currently don't support searching across multiple index types
         if (indexSearchers.size() > 1)
             throw new RuntimeException("Unable to search across multiple secondary index types");
-        
-        
-        return indexSearchers.get(0).search(clause, range, dataFilter);
+
+
+        return indexSearchers.get(0).search(clause, range, maxResults, dataFilter, maxIsColumns);
+    }
+
+    public void setIndexBuilt(Collection<ByteBuffer> indexes)
+    {
+        for (ByteBuffer colName : indexes)
+            indexesByColumn.get(colName).setIndexBuilt(colName);
+    }
+
+    public void setIndexRemoved(Collection<ByteBuffer> indexes)
+    {
+        for (ByteBuffer colName : indexes)
+            indexesByColumn.get(colName).setIndexRemoved(colName);
     }
 }

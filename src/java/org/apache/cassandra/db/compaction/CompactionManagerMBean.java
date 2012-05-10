@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,15 +15,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.db.compaction;
 
 import java.util.List;
+import java.util.Map;
 
 public interface CompactionManagerMBean
 {
     /** List of running compaction objects. */
-    public List<CompactionInfo> getCompactions();
+    public List<Map<String, String>> getCompactions();
 
     /** List of running compaction summary strings. */
     public List<String> getCompactionSummary();
@@ -37,6 +37,16 @@ public interface CompactionManagerMBean
      * @return number of completed compactions since server [re]start
      */
     public long getCompletedTasks();
+
+    /**
+     * @return total number of bytes compacted since server [re]start
+     */
+    public long getTotalBytesCompacted();
+
+    /**
+     * @return total number of compactions since server [re]start
+     */
+    public long getTotalCompactionsCompleted();
 
     /**
      * Triggers the compaction of user specified sstables.

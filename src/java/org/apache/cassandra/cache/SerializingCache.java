@@ -1,6 +1,4 @@
-package org.apache.cassandra.cache;
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,20 +6,17 @@ package org.apache.cassandra.cache;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+package org.apache.cassandra.cache;
 
-
-import java.io.DataOutputStream;
 import java.io.IOError;
 import java.io.IOException;
 import java.util.Set;
@@ -31,9 +26,12 @@ import com.googlecode.concurrentlinkedhashmap.EvictionListener;
 import com.googlecode.concurrentlinkedhashmap.Weigher;
 import com.googlecode.concurrentlinkedhashmap.Weighers;
 
+import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.io.ISerializer;
 import org.apache.cassandra.io.util.MemoryInputStream;
 import org.apache.cassandra.io.util.MemoryOutputStream;
+import org.apache.cassandra.utils.vint.EncodedDataInputStream;
+import org.apache.cassandra.utils.vint.EncodedDataOutputStream;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,8 +42,10 @@ import org.slf4j.LoggerFactory;
 public class SerializingCache<K, V> implements ICache<K, V>
 {
     private static final Logger logger = LoggerFactory.getLogger(SerializingCache.class);
+    private static final TypeSizes ENCODED_TYPE_SIZES = TypeSizes.VINT;
+
     private static final int DEFAULT_CONCURENCY_LEVEL = 64;
-    
+
     private final ConcurrentLinkedHashMap<K, FreeableMemory> map;
     private final ISerializer<V> serializer;
 
@@ -65,7 +65,6 @@ public class SerializingCache<K, V> implements ICache<K, V>
                    .weigher(useMemoryWeigher
                                 ? createMemoryWeigher()
                                 : Weighers.<FreeableMemory>singleton())
-                   .initialCapacity(capacity)
                    .maximumWeightedCapacity(capacity)
                    .concurrencyLevel(DEFAULT_CONCURENCY_LEVEL)
                    .listener(listener)
@@ -76,7 +75,6 @@ public class SerializingCache<K, V> implements ICache<K, V>
     {
         return new Weigher<FreeableMemory>()
         {
-            @Override
             public int weightOf(FreeableMemory value)
             {
                 return (int) Math.min(value.size(), Integer.MAX_VALUE);
@@ -84,11 +82,11 @@ public class SerializingCache<K, V> implements ICache<K, V>
         };
     }
 
-	private V deserialize(FreeableMemory mem)
+    private V deserialize(FreeableMemory mem)
     {
         try
         {
-            return serializer.deserialize(new MemoryInputStream(mem));
+            return serializer.deserialize(new EncodedDataInputStream(new MemoryInputStream(mem)));
         }
         catch (IOException e)
         {
@@ -99,7 +97,7 @@ public class SerializingCache<K, V> implements ICache<K, V>
 
     private FreeableMemory serialize(V value)
     {
-        long serializedSize = serializer.serializedSize(value);
+        long serializedSize = serializer.serializedSize(value, ENCODED_TYPE_SIZES);
         if (serializedSize > Integer.MAX_VALUE)
             throw new IllegalArgumentException("Unable to allocate " + serializedSize + " bytes");
 
@@ -115,7 +113,7 @@ public class SerializingCache<K, V> implements ICache<K, V>
 
         try
         {
-            serializer.serialize(value, new DataOutputStream(new MemoryOutputStream(freeableMemory)));
+            serializer.serialize(value, new EncodedDataOutputStream(new MemoryOutputStream(freeableMemory)));
         }
         catch (IOException e)
         {
@@ -180,6 +178,52 @@ public class SerializingCache<K, V> implements ICache<K, V>
         FreeableMemory old = map.put(key, mem);
         if (old != null)
             old.unreference();
+    }
+
+    public boolean putIfAbsent(K key, V value)
+    {
+        FreeableMemory mem = serialize(value);
+        if (mem == null)
+            return false; // out of memory.  never mind.
+
+        FreeableMemory old = map.putIfAbsent(key, mem);
+        if (old != null)
+            // the new value was not put, we've uselessly allocated some memory, free it
+            mem.unreference();
+        return old == null;
+    }
+
+    public boolean replace(K key, V oldToReplace, V value)
+    {
+        // if there is no old value in our map, we fail
+        FreeableMemory old = map.get(key);
+        if (old == null)
+            return false;
+
+        // see if the old value matches the one we want to replace
+        FreeableMemory mem = serialize(value);
+        if (mem == null)
+            return false; // out of memory.  never mind.
+
+        V oldValue;
+        // reference old guy before de-serializing
+        if (!old.reference())
+            return false; // we have already freed hence noop.
+        try
+        {
+             oldValue = deserialize(old);
+        }
+        finally
+        {
+            old.unreference();
+        }
+        boolean success = oldValue.equals(oldToReplace) && map.replace(key, old, mem);
+
+        if (success)
+            old.unreference(); // so it will be eventually be cleaned
+        else
+            mem.unreference();
+        return success;
     }
 
     public void remove(K key)

@@ -19,11 +19,10 @@
 
 package org.apache.cassandra.service;
 
-import org.apache.cassandra.CleanupHelper;
+import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.config.ConfigurationException;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.junit.Test;
-import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertFalse;
 
 import java.io.File;
@@ -34,8 +33,8 @@ public class StorageServiceClientTest
     @Test
     public void testClientOnlyMode() throws IOException, ConfigurationException
     {
-        CleanupHelper.mkdirs();
-        CleanupHelper.cleanup();
+        SchemaLoader.mkdirs();
+        SchemaLoader.cleanup();
         StorageService.instance.initClient(0);
 
         // verify that no storage directories were created.

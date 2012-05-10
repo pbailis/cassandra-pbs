@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.dht;
 
 import java.math.BigDecimal;
@@ -42,12 +41,12 @@ public class RandomPartitioner extends AbstractPartitioner<BigIntegerToken>
 
     private static final byte DELIMITER_BYTE = ":".getBytes()[0];
 
-    public DecoratedKey<BigIntegerToken> decorateKey(ByteBuffer key)
+    public DecoratedKey decorateKey(ByteBuffer key)
     {
-        return new DecoratedKey<BigIntegerToken>(getToken(key), key);
+        return new DecoratedKey(getToken(key), key);
     }
-    
-    public DecoratedKey<BigIntegerToken> convertFromDiskFormat(ByteBuffer fromdisk)
+
+    public DecoratedKey convertFromDiskFormat(ByteBuffer fromdisk)
     {
         // find the delimiter position
         int splitPoint = -1;
@@ -73,7 +72,7 @@ public class RandomPartitioner extends AbstractPartitioner<BigIntegerToken>
         }
         ByteBuffer key = fromdisk.duplicate();
         key.position(splitPoint + 1);
-        return new DecoratedKey<BigIntegerToken>(new BigIntegerToken(token), key);
+        return new DecoratedKey(new BigIntegerToken(token), key);
     }
 
     public Token midpoint(Token ltoken, Token rtoken)
@@ -86,7 +85,7 @@ public class RandomPartitioner extends AbstractPartitioner<BigIntegerToken>
         return new BigIntegerToken(midpair.left);
     }
 
-	public BigIntegerToken getMinimumToken()
+    public BigIntegerToken getMinimumToken()
     {
         return MINIMUM;
     }

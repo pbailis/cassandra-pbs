@@ -1,6 +1,4 @@
-package org.apache.cassandra.dht;
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,25 +6,27 @@ package org.apache.cassandra.dht;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-
+package org.apache.cassandra.dht;
 
 import java.util.Collections;
 import java.util.List;
 
 import org.apache.cassandra.db.RowPosition;
 import org.apache.cassandra.service.StorageService;
+import org.apache.cassandra.utils.Pair;
 
+/**
+ * AbstractBounds containing both its endpoints: [left, right].  Used by "classic" by-key range scans.
+ */
 public class Bounds<T extends RingPosition> extends AbstractBounds<T>
 {
     public Bounds(T left, T right)
@@ -46,9 +46,16 @@ public class Bounds<T extends RingPosition> extends AbstractBounds<T>
         return Range.contains(left, right, position) || left.equals(position);
     }
 
-    public AbstractBounds<T> createFrom(T position)
+    public Pair<AbstractBounds<T>, AbstractBounds<T>> split(T position)
     {
-        return new Bounds<T>(left, position, partitioner);
+        assert contains(position);
+        // Check if the split would have no effect on the range
+        if (position.equals(right))
+            return null;
+
+        AbstractBounds<T> lb = new Bounds<T>(left, position, partitioner);
+        AbstractBounds<T> rb = new Range<T>(position, right, partitioner);
+        return new Pair<AbstractBounds<T>, AbstractBounds<T>>(lb, rb);
     }
 
     public List<? extends AbstractBounds<T>> unwrap()

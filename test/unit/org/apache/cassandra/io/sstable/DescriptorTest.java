@@ -1,6 +1,6 @@
 package org.apache.cassandra.io.sstable;
 /*
- * 
+ *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,75 +8,59 @@ package org.apache.cassandra.io.sstable;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *   http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
- * 
+ *
  */
 
-
-import java.io.File;
-
+import org.apache.cassandra.utils.FilterFactory;
 import org.junit.Test;
-
-import org.apache.cassandra.db.Table;
+import static org.junit.Assert.*;
 
 public class DescriptorTest
 {
     @Test
     public void testLegacy()
     {
-        Descriptor descriptor = Descriptor.fromFilename(new File("Keyspace1"), "userActionUtilsKey-9-Data.db").left;
+        Descriptor descriptor = Descriptor.fromFilename("Keyspace1-userActionUtilsKey-9-Data.db");
+
         assert descriptor.version.equals(Descriptor.LEGACY_VERSION);
-        assert descriptor.usesOldBloomFilter;
-    }
-
-    @Test
-    public void testExtractKeyspace()
-    {
-        // Test a path representing a SNAPSHOT directory
-        String dirPath = "Keyspace10" + File.separator + Table.SNAPSHOT_SUBDIR_NAME + File.separator + System.currentTimeMillis();
-        assertKeyspace("Keyspace10", dirPath);
-
-        // Test a path representing a regular SSTables directory
-        dirPath = "Keyspace11";
-        assertKeyspace("Keyspace11", dirPath);
+        assert descriptor.filterType == FilterFactory.Type.SHA;
     }
 
     @Test
     public void testVersion()
     {
         // letter only
-        Descriptor desc = Descriptor.fromFilename(new File("Keyspace1"), "Standard1-h-1-Data.db").left;
+        Descriptor desc = Descriptor.fromFilename("Keyspace1-Standard1-h-1-Data.db");
         assert "h".equals(desc.version);
-        assert desc.tracksMaxTimestamp;
 
         // multiple letters
-        desc = Descriptor.fromFilename(new File("Keyspace1"), "Standard1-ha-1-Data.db").left;
+        desc = Descriptor.fromFilename("Keyspace1-Standard1-ha-1-Data.db");
         assert "ha".equals(desc.version);
-        assert desc.tracksMaxTimestamp;
 
         // hypothetical two-letter g version
-        desc = Descriptor.fromFilename(new File("Keyspace1"), "Standard1-gz-1-Data.db").left;
+        desc = Descriptor.fromFilename("Keyspace1-Standard1-gz-1-Data.db");
         assert "gz".equals(desc.version);
         assert !desc.tracksMaxTimestamp;
     }
 
-    private void assertKeyspace(String expectedKsName, String dirPath) {
-        File dir = new File(dirPath);
-        dir.deleteOnExit();
+    @Test
+    public void testMurmurBloomFilter()
+    {
+        Descriptor desc = Descriptor.fromFilename("Keyspace1-Standard1-hz-1-Data.db");
+        assertEquals("hz", desc.version);
+        assertEquals(desc.filterType, FilterFactory.Type.MURMUR2);
 
-        // Create and check.
-        if (!dir.mkdirs())
-            throw new RuntimeException("Unable to create directories:" + dirPath);
-
-        String currentKsName = Descriptor.extractKeyspaceName(dir);
-        assert expectedKsName.equals(currentKsName);
+        desc = Descriptor.fromFilename("Keyspace1-Standard1-ia-1-Data.db");
+        assertEquals("ia", desc.version);
+        assertEquals(desc.filterType, FilterFactory.Type.MURMUR3);
     }
 }

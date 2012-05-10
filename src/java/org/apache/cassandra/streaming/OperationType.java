@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.streaming;
 
 /**
@@ -27,6 +26,7 @@ public enum OperationType
     BOOTSTRAP,
     UNBOOTSTRAP,
     RESTORE_REPLICA_COUNT,
-    BULK_LOAD;
+    BULK_LOAD,
+    REBUILD
 }
 

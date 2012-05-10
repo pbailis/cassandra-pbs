@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.net;
 
 /**
@@ -24,7 +23,7 @@ package org.apache.cassandra.net;
  * for a given verb.
  */
 
-public interface IVerbHandler
+public interface IVerbHandler<T>
 {
     /**
      * This method delivers a message to the implementing class (if the implementing
@@ -35,5 +34,5 @@ public interface IVerbHandler
      * @param message - incoming message that needs handling.
      * @param id
      */
-    public void doVerb(Message message, String id);
+    public void doVerb(MessageIn<T> message, String id);
 }

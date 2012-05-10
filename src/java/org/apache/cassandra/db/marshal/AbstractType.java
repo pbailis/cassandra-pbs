@@ -1,6 +1,4 @@
-package org.apache.cassandra.db.marshal;
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,18 +6,16 @@ package org.apache.cassandra.db.marshal;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-
+package org.apache.cassandra.db.marshal;
 
 import java.nio.ByteBuffer;
 import java.util.Collection;
@@ -93,20 +89,16 @@ public abstract class AbstractType<T> implements Comparator<ByteBuffer>
             }
         };
     }
-    
+
     public abstract T compose(ByteBuffer bytes);
-    
+
     public abstract ByteBuffer decompose(T value);
 
     /** get a string representation of the bytes suitable for log messages */
     public abstract String getString(ByteBuffer bytes);
 
-    /** get a byte representation of the given string.
-     *  defaults to unsupportedoperation so people deploying custom Types can update at their leisure. */
-    public ByteBuffer fromString(String source) throws MarshalException
-    {
-        throw new UnsupportedOperationException();
-    }
+    /** get a byte representation of the given string. */
+    public abstract ByteBuffer fromString(String source) throws MarshalException;
 
     /* validate that the byte array is a valid sequence for the type we are supposed to be comparing */
     public abstract void validate(ByteBuffer bytes) throws MarshalException;
@@ -144,7 +136,7 @@ public abstract class AbstractType<T> implements Comparator<ByteBuffer>
         return false;
     }
 
-    public static AbstractType parseDefaultParameters(AbstractType baseType, TypeParser parser) throws ConfigurationException
+    public static AbstractType<?> parseDefaultParameters(AbstractType<?> baseType, TypeParser parser) throws ConfigurationException
     {
         Map<String, String> parameters = parser.getKeyValueParameters();
         String reversed = parameters.get("reversed");
@@ -156,6 +148,21 @@ public abstract class AbstractType<T> implements Comparator<ByteBuffer>
         {
             return baseType;
         }
+    }
+
+    /**
+     * Returns true if this comparator is compatible with the provided
+     * previous comparator, that is if previous can safely be replaced by this.
+     * A comparator cn should be compatible with a previous one cp if forall columns c1 and c2,
+     * if   cn.validate(c1) and cn.validate(c2) and cn.compare(c1, c2) == v,
+     * then cp.validate(c1) and cp.validate(c2) and cp.compare(c1, c2) == v.
+     *
+     * Note that a type should be compatible with at least itself and when in
+     * doubt, keep the default behavior of not being compatible with any other comparator!
+     */
+    public boolean isCompatibleWith(AbstractType<?> previous)
+    {
+        return this == previous;
     }
 
     /**

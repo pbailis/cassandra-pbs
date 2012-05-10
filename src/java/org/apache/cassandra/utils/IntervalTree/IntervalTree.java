@@ -1,6 +1,4 @@
-package org.apache.cassandra.utils.IntervalTree;
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,19 +6,18 @@ package org.apache.cassandra.utils.IntervalTree;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+package org.apache.cassandra.utils.IntervalTree;
 
-
+import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
 
@@ -50,12 +47,12 @@ public class IntervalTree<T>
 
     public List<T> search(Interval<T> searchInterval)
     {
-        List<T> retlist = new LinkedList<T>();
-        searchInternal(head, searchInterval, retlist);
-        return retlist;
+        List<T> results = new ArrayList<T>();
+        searchInternal(head, searchInterval, results);
+        return results;
     }
 
-    protected void searchInternal(IntervalNode node, Interval<T> searchInterval, List<T> retList)
+    protected void searchInternal(IntervalNode node, Interval<T> searchInterval, List<T> results)
     {
         if (null == head)
             return;
@@ -68,11 +65,11 @@ public class IntervalTree<T>
         {
             for (Interval<T> interval : node.intersects_left)
             {
-                retList.add(interval.Data);
+                results.add(interval.Data);
             }
 
-            searchInternal(node.left, searchInterval, retList);
-            searchInternal(node.right, searchInterval, retList);
+            searchInternal(node.left, searchInterval, results);
+            searchInternal(node.right, searchInterval, results);
             return;
         }
 
@@ -86,11 +83,11 @@ public class IntervalTree<T>
             {
                 if (interval.max.compareTo(searchInterval.min) >= 0)
                 {
-                    retList.add(interval.Data);
+                    results.add(interval.Data);
                 }
                 else break;
             }
-            searchInternal(node.right, searchInterval, retList);
+            searchInternal(node.right, searchInterval, results);
             return;
         }
 
@@ -104,11 +101,11 @@ public class IntervalTree<T>
             {
                 if (interval.min.compareTo(searchInterval.max) <= 0)
                 {
-                    retList.add(interval.Data);
+                    results.add(interval.Data);
                 }
                 else break;
             }
-            searchInternal(node.left, searchInterval, retList);
+            searchInternal(node.left, searchInterval, results);
             return;
         }
     }

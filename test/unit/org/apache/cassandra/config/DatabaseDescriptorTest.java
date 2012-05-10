@@ -18,40 +18,27 @@
 */
 package org.apache.cassandra.config;
 
-import static org.junit.Assert.assertNotNull;
-
-import org.apache.avro.specific.SpecificRecord;
-
-import org.apache.cassandra.CleanupHelper;
-import org.apache.cassandra.db.migration.AddKeyspace;
+import org.apache.cassandra.SchemaLoader;
+import org.apache.cassandra.gms.Gossiper;
 import org.apache.cassandra.locator.SimpleStrategy;
-import org.apache.cassandra.io.SerDeUtils;
+import org.apache.cassandra.service.MigrationManager;
+import org.apache.cassandra.thrift.InvalidRequestException;
 
 import org.junit.Test;
 
 import java.io.IOException;
-import java.util.UUID;
 
 public class DatabaseDescriptorTest
 {
-    protected <D extends SpecificRecord> D serDe(D record, D newInstance) throws IOException
-    {
-        D actual = SerDeUtils.deserialize(record.getSchema(),
-                                              SerDeUtils.serialize(record),
-                                              newInstance);
-        assert actual.equals(record) : actual + " != " + record;
-        return actual;
-    }
-    
     @Test
-    public void testCFMetaDataSerialization() throws IOException, ConfigurationException
+    public void testCFMetaDataSerialization() throws IOException, ConfigurationException, InvalidRequestException
     {
         // test serialization of all defined test CFs.
         for (String table : Schema.instance.getNonSystemTables())
         {
             for (CFMetaData cfm : Schema.instance.getTableMetaData(table).values())
             {
-                CFMetaData cfmDupe = CFMetaData.fromAvro(serDe(cfm.toAvro(), new org.apache.cassandra.db.migration.avro.CfDef()));
+                CFMetaData cfmDupe = CFMetaData.fromThrift(cfm.toThrift());
                 assert cfmDupe != null;
                 assert cfmDupe.equals(cfm);
             }
@@ -65,38 +52,45 @@ public class DatabaseDescriptorTest
         {
             // Not testing round-trip on the KsDef via serDe() because maps
             //  cannot be compared in avro.
-            KSMetaData ksmDupe = KSMetaData.fromAvro(ksm.toAvro());
+            KSMetaData ksmDupe = KSMetaData.fromThrift(ksm.toThrift());
             assert ksmDupe != null;
             assert ksmDupe.equals(ksm);
         }
     }
-    
+
     // this came as a result of CASSANDRA-995
     @Test
     public void testTransKsMigration() throws IOException, ConfigurationException
     {
-        CleanupHelper.cleanupAndLeaveDirs();
+        SchemaLoader.cleanupAndLeaveDirs();
         DatabaseDescriptor.loadSchemas();
         assert Schema.instance.getNonSystemTables().size() == 0;
-        
-        // add a few.
-        AddKeyspace ks0 = new AddKeyspace(KSMetaData.testMetadata("ks0", SimpleStrategy.class, KSMetaData.optsWithRF(3)));
-        ks0.apply();
-        AddKeyspace ks1 = new AddKeyspace(KSMetaData.testMetadata("ks1", SimpleStrategy.class, KSMetaData.optsWithRF(3)));
-        ks1.apply();
 
-        assert Schema.instance.getTableDefinition("ks0") != null;
-        assert Schema.instance.getTableDefinition("ks1") != null;
+        Gossiper.instance.start((int)(System.currentTimeMillis() / 1000));
 
-        Schema.instance.clearTableDefinition(Schema.instance.getTableDefinition("ks0"), new UUID(4096, 0));
-        Schema.instance.clearTableDefinition(Schema.instance.getTableDefinition("ks1"), new UUID(4096, 0));
+        try
+        {
+            // add a few.
+            MigrationManager.announceNewKeyspace(KSMetaData.testMetadata("ks0", SimpleStrategy.class, KSMetaData.optsWithRF(3)));
+            MigrationManager.announceNewKeyspace(KSMetaData.testMetadata("ks1", SimpleStrategy.class, KSMetaData.optsWithRF(3)));
 
-        assert Schema.instance.getTableDefinition("ks0") == null;
-        assert Schema.instance.getTableDefinition("ks1") == null;
-        
-        DatabaseDescriptor.loadSchemas();
+            assert Schema.instance.getTableDefinition("ks0") != null;
+            assert Schema.instance.getTableDefinition("ks1") != null;
 
-        assert Schema.instance.getTableDefinition("ks0") != null;
-        assert Schema.instance.getTableDefinition("ks1") != null;
+            Schema.instance.clearTableDefinition(Schema.instance.getTableDefinition("ks0"));
+            Schema.instance.clearTableDefinition(Schema.instance.getTableDefinition("ks1"));
+
+            assert Schema.instance.getTableDefinition("ks0") == null;
+            assert Schema.instance.getTableDefinition("ks1") == null;
+
+            DatabaseDescriptor.loadSchemas();
+
+            assert Schema.instance.getTableDefinition("ks0") != null;
+            assert Schema.instance.getTableDefinition("ks1") != null;
+        }
+        finally
+        {
+            Gossiper.instance.stop();
+        }
     }
 }

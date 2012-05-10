@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,11 +15,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.db;
 
-import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutionException;
 
 import org.apache.cassandra.config.ConfigurationException;
@@ -33,22 +32,22 @@ public interface ColumnFamilyStoreMBean
      * @return the name of the column family
      */
     public String getColumnFamilyName();
-    
+
     /**
      * Returns the total amount of data stored in the memtable, including
      * column related overhead.
-     * 
+     *
      * @return The size in bytes.
      */
     public long getMemtableDataSize();
-    
+
     /**
      * Returns the total number of columns present in the memtable.
-     * 
+     *
      * @return The number of columns.
      */
     public long getMemtableColumnsCount();
-    
+
     /**
      * Returns the number of times that a flush has resulted in the
      * memtable being switched out.
@@ -56,11 +55,6 @@ public interface ColumnFamilyStoreMBean
      * @return the number of memtable switches
      */
     public int getMemtableSwitchCount();
-
-    /**
-     * Triggers an immediate memtable flush.
-     */
-    public Object forceFlush() throws IOException;
 
     /**
      * @return a histogram of the number of sstable data files accessed per read: reading this property resets it
@@ -101,7 +95,7 @@ public interface ColumnFamilyStoreMBean
      * @return the number of write operations on this column family
      */
     public long getWriteCount();
-    
+
     /**
      * @return total write latency (divide by getReadCount() for average)
      */
@@ -148,20 +142,17 @@ public interface ColumnFamilyStoreMBean
     public void forceMajorCompaction() throws ExecutionException, InterruptedException;
 
     /**
-     * return the size of the smallest compacted row
-     * @return
+     * @return the size of the smallest compacted row
      */
     public long getMinRowSize();
 
     /**
-     * return the size of the largest compacted row
-     * @return
+     * @return the size of the largest compacted row
      */
     public long getMaxRowSize();
 
     /**
-     * return the mean size of the rows compacted
-     * @return
+     * @return the size of the smallest compacted row
      */
     public long getMeanRowSize();
 
@@ -205,6 +196,17 @@ public interface ColumnFamilyStoreMBean
      * Gets the compaction strategy class name
      */
     public String getCompactionStrategyClass();
+
+    /**
+     * Get the compression parameters
+     */
+    public Map<String,String> getCompressionParameters();
+
+    /**
+     * Set the compression parameters
+     * @param opts map of string names to values
+     */
+    public void setCompressionParameters(Map<String,String> opts) throws ConfigurationException;
 
     /**
      * Disable automatic compaction.

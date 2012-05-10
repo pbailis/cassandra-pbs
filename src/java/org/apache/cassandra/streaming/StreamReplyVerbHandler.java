@@ -1,7 +1,4 @@
-package org.apache.cassandra.streaming;
-
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -10,16 +7,16 @@ package org.apache.cassandra.streaming;
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+package org.apache.cassandra.streaming;
+
 
 import java.io.DataInputStream;
 import java.io.IOError;
@@ -30,42 +27,42 @@ import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.io.util.FastByteArrayInputStream;
 import org.apache.cassandra.net.IVerbHandler;
-import org.apache.cassandra.net.Message;
+import org.apache.cassandra.net.MessageIn;
 
-public class StreamReplyVerbHandler implements IVerbHandler
+public class StreamReplyVerbHandler implements IVerbHandler<StreamReply>
 {
-    private static Logger logger = LoggerFactory.getLogger(StreamReplyVerbHandler.class);
+    private static final Logger logger = LoggerFactory.getLogger(StreamReplyVerbHandler.class);
 
-    public void doVerb(Message message, String id)
+    public void doVerb(MessageIn<StreamReply> message, String id)
     {
-        byte[] body = message.getMessageBody();
-        FastByteArrayInputStream bufIn = new FastByteArrayInputStream(body);
-
         try
         {
-            StreamReply reply = StreamReply.serializer.deserialize(new DataInputStream(bufIn), message.getVersion());
+            StreamReply reply = message.payload;
             logger.debug("Received StreamReply {}", reply);
-            StreamOutSession session = StreamOutSession.get(message.getFrom(), reply.sessionId);
+            StreamOutSession session = StreamOutSession.get(message.from, reply.sessionId);
             if (session == null)
             {
-                logger.debug("Received stream action " + reply.action + " for an unknown session from " + message.getFrom());
+                logger.debug("Received stream action " + reply.action + " for an unknown session from " + message.from);
                 return;
             }
 
             switch (reply.action)
             {
                 case FILE_FINISHED:
-                    logger.info("Successfully sent {} to {}", reply.file, message.getFrom());
+                    logger.info("Successfully sent {} to {}", reply.file, message.from);
                     session.validateCurrentFile(reply.file);
                     session.startNext();
                     break;
                 case FILE_RETRY:
                     session.validateCurrentFile(reply.file);
-                    logger.info("Need to re-stream file {} to {}", reply.file, message.getFrom());
+                    logger.info("Need to re-stream file {} to {}", reply.file, message.from);
                     session.retry();
                     break;
                 case SESSION_FINISHED:
-                    session.close();
+                    session.close(true);
+                    break;
+                case SESSION_FAILURE:
+                    session.close(false);
                     break;
                 default:
                     throw new RuntimeException("Cannot handle FileStatus.Action: " + reply.action);

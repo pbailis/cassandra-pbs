@@ -19,7 +19,6 @@
 package org.apache.cassandra.db;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.util.concurrent.ExecutionException;
 import java.util.Collection;
 
@@ -34,12 +33,12 @@ import org.apache.cassandra.db.filter.QueryPath;
 import static org.apache.cassandra.Util.addMutation;
 import static org.apache.cassandra.Util.getBytes;
 
-import org.apache.cassandra.CleanupHelper;
+import org.apache.cassandra.SchemaLoader;
 import static junit.framework.Assert.assertNotNull;
 import org.apache.cassandra.utils.ByteBufferUtil;
 
 
-public class RemoveSuperColumnTest extends CleanupHelper
+public class RemoveSuperColumnTest extends SchemaLoader
 {
     @Test
     public void testRemoveSuperColumn() throws IOException, ExecutionException, InterruptedException

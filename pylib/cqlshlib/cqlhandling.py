@@ -23,21 +23,57 @@ from itertools import izip
 
 Hint = pylexotron.Hint
 
+keywords = set((
+    'select', 'from', 'where', 'and', 'key', 'insert', 'update', 'with',
+    'limit', 'using', 'consistency', 'one', 'quorum', 'all', 'any',
+    'local_quorum', 'each_quorum', 'two', 'three', 'use', 'count', 'set',
+    'begin', 'apply', 'batch', 'truncate', 'delete', 'in', 'create',
+    'keyspace', 'schema', 'columnfamily', 'table', 'index', 'on', 'drop',
+    'primary', 'into', 'values', 'timestamp', 'ttl', 'alter', 'add', 'type',
+    'first', 'reversed'
+))
+
 columnfamily_options = (
     # (CQL option name, Thrift option name (or None if same))
     ('comment', None),
     ('comparator', 'comparator_type'),
-    ('row_cache_provider', None),
-    ('key_cache_size', None),
-    ('row_cache_size', None),
     ('read_repair_chance', None),
     ('gc_grace_seconds', None),
     ('default_validation', 'default_validation_class'),
     ('min_compaction_threshold', None),
     ('max_compaction_threshold', None),
+    ('replicate_on_write', None),
+    ('compaction_strategy_class', 'compaction_strategy'),
+)
+
+obsolete_cf_options = (
+    ('key_cache_size', None),
+    ('row_cache_size', None),
     ('row_cache_save_period_in_seconds', None),
     ('key_cache_save_period_in_seconds', None),
-    ('replicate_on_write', None)
+    ('memtable_throughput_in_mb', None),
+    ('memtable_operations_in_millions', None),
+    ('memtable_flush_after_mins', None),
+    ('row_cache_provider', None),
+)
+
+all_columnfamily_options = columnfamily_options + obsolete_cf_options
+
+columnfamily_map_options = (
+    ('compaction_strategy_options', None,
+        ()),
+    ('compression_parameters', 'compression_options',
+        ('sstable_compression', 'chunk_length_kb', 'crc_check_chance')),
+)
+
+available_compression_classes = (
+    'DeflateCompressor',
+    'SnappyCompressor',
+)
+
+available_compaction_classes = (
+    'LeveledCompactionStrategy',
+    'SizeTieredCompactionStrategy'
 )
 
 cql_type_to_apache_class = {
@@ -83,13 +119,14 @@ consistency_levels = (
 valid_cql_word_re = re.compile(r"^(?:[a-z][a-z0-9_]*|-?[0-9][0-9.]*)$", re.I)
 
 def is_valid_cql_word(s):
-    return valid_cql_word_re.match(s) is not None
+    return valid_cql_word_re.match(s) is not None and s not in keywords
 
 def tokenize_cql(cql_text):
     return CqlLexotron.scan(cql_text)[0]
 
-def cql_detokenize(toklist):
-    return ' '.join([t[1] for t in toklist])
+def cql_extract_orig(toklist, srcstr):
+    # low end of span for first token, to high end of span for last token
+    return srcstr[toklist[0][2][0]:toklist[-1][2][1]]
 
 # note: commands_end_with_newline may be extended by an importing module.
 commands_end_with_newline = set()
@@ -119,9 +156,11 @@ def token_is_word(tok):
 def cql_escape(value):
     if value is None:
         return 'NULL' # this totally won't work
-    if isinstance(value, float):
+    if isinstance(value, bool):
+        value = str(value).lower()
+    elif isinstance(value, float):
         return '%f' % value
-    if isinstance(value, int):
+    elif isinstance(value, int):
         return str(value)
     return "'%s'" % value.replace("'", "''")
 
@@ -182,10 +221,12 @@ syntax_rules = r'''
 JUNK ::= /([ \t\r\f\v]+|(--|[/][/])[^\n\r]*([\n\r]|$)|[/][*].*?[*][/])/ ;
 
 <stringLiteral> ::= /'([^']|'')*'/ ;
+<dquoteLiteral> ::= /"([^"]|"")*"/ ;
 <float> ::=         /-?[0-9]+\.[0-9]+/ ;
 <integer> ::=       /-?[0-9]+/ ;
 <uuid> ::=          /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/ ;
-<identifier> ::=    /[a-z][a-z0-9_:]*/ ;
+<identifier> ::=    /[a-z][a-z0-9_]*/ ;
+<colon> ::=         ":" ;
 <star> ::=          "*" ;
 <range> ::=         ".." ;
 <endtoken> ::=      ";" ;
@@ -202,6 +243,7 @@ JUNK ::= /([ \t\r\f\v]+|(--|[/][/])[^\n\r]*([\n\r]|$)|[/][*].*?[*][/])/ ;
            ;
 <name> ::= <identifier>
          | <stringLiteral>
+         | <dquoteLiteral>
          | <integer>
          ;
 <term> ::= <stringLiteral>
@@ -319,7 +361,7 @@ explain_completion('whatToSelect', 'rangestart', '<range_start>')
 explain_completion('whatToSelect', 'rangeend', '<range_end>')
 
 syntax_rules += r'''
-<insertStatement> ::= "INSERT" "INTO" insertcf=<name>
+<insertStatement> ::= "INSERT" "INTO" ( insertks=<name> "." )? insertcf=<name>
                                "(" keyname=<colname> ","
                                    [colname]=<colname> ( "," [colname]=<colname> )* ")"
                       "VALUES" "(" <term> "," <term> ( "," <term> )* ")"
@@ -332,9 +374,22 @@ syntax_rules += r'''
                 ;
 '''
 
+@completer_for('insertStatement', 'insertks')
+def insert_ks_completer(ctxt, cass):
+    return [maybe_cql_escape(ks) + '.' for ks in cass.get_keyspace_names()]
+
 @completer_for('insertStatement', 'insertcf')
 def insert_cf_completer(ctxt, cass):
-    return map(maybe_cql_escape, cass.get_columnfamily_names())
+    ks = ctxt.get_binding('insertks', None)
+    if ks is not None:
+        ks = cql_dequote(ks)
+    try:
+        cfnames = cass.get_columnfamily_names(ks)
+    except Exception:
+        if ks is None:
+            return ()
+        raise
+    return map(maybe_cql_escape, cfnames)
 
 @completer_for('insertStatement', 'keyname')
 def insert_keyname_completer(ctxt, cass):
@@ -352,7 +407,7 @@ def insert_option_completer(ctxt, cass):
     return opts
 
 syntax_rules += r'''
-<updateStatement> ::= "UPDATE" cf=<name>
+<updateStatement> ::= "UPDATE" ( updateks=<name> "." )? updatecf=<name>
                         ( "USING" [updateopt]=<usingOption>
                                   ( "AND" [updateopt]=<usingOption> )* )?
                         "SET" <assignment> ( "," <assignment> )*
@@ -366,9 +421,22 @@ syntax_rules += r'''
                       ;
 '''
 
-@completer_for('updateStatement', 'cf')
+@completer_for('updateStatement', 'updateks')
 def update_cf_completer(ctxt, cass):
-    return map(maybe_cql_escape, cass.get_columnfamily_names())
+    return [maybe_cql_escape(ks) + '.' for ks in cass.get_keyspace_names()]
+
+@completer_for('updateStatement', 'updatecf')
+def update_cf_completer(ctxt, cass):
+    ks = ctxt.get_binding('updateks', None)
+    if ks is not None:
+        ks = cql_dequote(ks)
+    try:
+        cfnames = cass.get_columnfamily_names(ks)
+    except Exception:
+        if ks is None:
+            return ()
+        raise
+    return map(maybe_cql_escape, cfnames)
 
 @completer_for('updateStatement', 'updateopt')
 def insert_option_completer(ctxt, cass):
@@ -413,7 +481,7 @@ def update_filter_in_completer(ctxt, cass):
 
 syntax_rules += r'''
 <deleteStatement> ::= "DELETE" ( [delcol]=<colname> ( "," [delcol]=<colname> )* )?
-                        "FROM" cf=<name>
+                        "FROM" ( deleteks=<name> "." )? deletecf=<name>
                         ( "USING" [delopt]=<deleteOption> ( "AND" [delopt]=<deleteOption> )* )?
                         "WHERE" <updateWhereClause>
                     ;
@@ -422,9 +490,22 @@ syntax_rules += r'''
                  ;
 '''
 
-@completer_for('deleteStatement', 'cf')
+@completer_for('deleteStatement', 'deleteks')
+def update_cf_completer(ctxt, cass):
+    return [maybe_cql_escape(ks) + '.' for ks in cass.get_keyspace_names()]
+
+@completer_for('deleteStatement', 'deletecf')
 def delete_cf_completer(ctxt, cass):
-    return map(maybe_cql_escape, cass.get_columnfamily_names())
+    ks = ctxt.get_binding('deleteks', None)
+    if ks is not None:
+        ks = cql_dequote(ks)
+    try:
+        cfnames = cass.get_columnfamily_names(ks)
+    except Exception:
+        if ks is None:
+            return ()
+        raise
+    return map(maybe_cql_escape, cfnames)
 
 @completer_for('deleteStatement', 'delopt')
 def delete_opt_completer(ctxt, cass):
@@ -457,13 +538,26 @@ def batch_opt_completer(ctxt, cass):
     return opts
 
 syntax_rules += r'''
-<truncateStatement> ::= "TRUNCATE" cf=<name>
+<truncateStatement> ::= "TRUNCATE" ( truncateks=<name> "." )? truncatecf=<name>
                       ;
 '''
 
-@completer_for('truncateStatement', 'cf')
+@completer_for('truncateStatement', 'truncateks')
+def update_cf_completer(ctxt, cass):
+    return [maybe_cql_escape(ks) + '.' for ks in cass.get_keyspace_names()]
+
+@completer_for('truncateStatement', 'truncatecf')
 def truncate_cf_completer(ctxt, cass):
-    return map(maybe_cql_escape, cass.get_columnfamily_names())
+    ks = ctxt.get_binding('truncateks', None)
+    if ks is not None:
+        ks = cql_dequote(ks)
+    try:
+        cfnames = cass.get_columnfamily_names(ks)
+    except Exception:
+        if ks is None:
+            return ()
+        raise
+    return map(maybe_cql_escape, cfnames)
 
 syntax_rules += r'''
 <createKeyspaceStatement> ::= "CREATE" "KEYSPACE" ksname=<name>
@@ -504,11 +598,14 @@ syntax_rules += r'''
 <createColumnFamilyStatement> ::= "CREATE" "COLUMNFAMILY" cf=<name>
                                     "(" keyalias=<colname> <storageType> "PRIMARY" "KEY"
                                         ( "," colname=<colname> <storageType> )* ")"
-                                   ( "WITH" [cfopt]=<identifier> "=" [optval]=<cfOptionVal>
-                                     ( "AND" [cfopt]=<identifier> "=" [optval]=<cfOptionVal> )* )?
+                                   ( "WITH" [cfopt]=<cfOptionName> "=" [optval]=<cfOptionVal>
+                                     ( "AND" [cfopt]=<cfOptionName> "=" [optval]=<cfOptionVal> )* )?
                                 ;
-<cfOptionVal> ::= <storageType>
-                | <identifier>
+
+<cfOptionName> ::= cfoptname=<identifier> ( cfoptsep=":" cfsubopt=( <identifier> | <integer> ) )?
+                 ;
+
+<cfOptionVal> ::= <identifier>
                 | <stringLiteral>
                 | <integer>
                 | <float>
@@ -518,11 +615,67 @@ syntax_rules += r'''
 explain_completion('createColumnFamilyStatement', 'keyalias', '<new_key_alias>')
 explain_completion('createColumnFamilyStatement', 'cf', '<new_columnfamily_name>')
 explain_completion('createColumnFamilyStatement', 'colname', '<new_column_name>')
-explain_completion('createColumnFamilyStatement', 'optval', '<option_value>')
 
-@completer_for('createColumnFamilyStatement', 'cfopt')
+@completer_for('cfOptionName', 'cfoptname')
 def create_cf_option_completer(ctxt, cass):
-    return [c[0] for c in columnfamily_options]
+    return [c[0] for c in columnfamily_options] + \
+           [c[0] + ':' for c in columnfamily_map_options]
+
+@completer_for('cfOptionName', 'cfoptsep')
+def create_cf_suboption_separator(ctxt, cass):
+    opt = ctxt.get_binding('cfoptname')
+    if any(opt == c[0] for c in columnfamily_map_options):
+        return [':']
+    return ()
+
+@completer_for('cfOptionName', 'cfsubopt')
+def create_cf_suboption_completer(ctxt, cass):
+    opt = ctxt.get_binding('cfoptname')
+    if opt == 'compaction_strategy_options':
+        # try to determine the strategy class in use
+        prevopts = ctxt.get_binding('cfopt', ())
+        prevvals = ctxt.get_binding('optval', ())
+        for prevopt, prevval in zip(prevopts, prevvals):
+            if prevopt == 'compaction_strategy_class':
+                csc = cql_dequote(prevval)
+                break
+        else:
+            cf = ctxt.get_binding('cf')
+            try:
+                csc = cass.get_columnfamily(cf).compaction_strategy
+            except Exception:
+                csc = ''
+        csc = csc.split('.')[-1]
+        if csc == 'SizeTieredCompactionStrategy':
+            return ['min_sstable_size']
+        elif csc == 'LeveledCompactionStrategy':
+            return ['sstable_size_in_mb']
+    for optname, _, subopts in columnfamily_map_options:
+        if opt == optname:
+            return subopts
+    return ()
+
+def create_cf_option_val_completer(ctxt, cass):
+    exist_opts = ctxt.get_binding('cfopt')
+    this_opt = exist_opts[-1]
+    if this_opt == 'compression_parameters:sstable_compression':
+        return map(cql_escape, available_compression_classes)
+    if this_opt == 'compaction_strategy_class':
+        return map(cql_escape, available_compaction_classes)
+    if any(this_opt == opt[0] for opt in obsolete_cf_options):
+        return ["'<obsolete_option>'"]
+    if this_opt in ('comparator', 'default_validation'):
+        return cql_types
+    if this_opt == 'read_repair_chance':
+        return [Hint('<float_between_0_and_1>')]
+    if this_opt == 'replicate_on_write':
+        return [Hint('<yes_or_no>')]
+    if this_opt in ('min_compaction_threshold', 'max_compaction_threshold', 'gc_grace_seconds'):
+        return [Hint('<integer>')]
+    return [Hint('<option_value>')]
+
+completer_for('createColumnFamilyStatement', 'optval') \
+    (create_cf_option_val_completer)
 
 syntax_rules += r'''
 <createIndexStatement> ::= "CREATE" "INDEX" indexname=<identifier>? "ON"
@@ -575,6 +728,8 @@ syntax_rules += r'''
 <alterInstructions> ::= "ALTER" existcol=<name> "TYPE" <storageType>
                       | "ADD" newcol=<name> <storageType>
                       | "DROP" existcol=<name>
+                      | "WITH" [cfopt]=<cfOptionName> "=" [optval]=<cfOptionVal>
+                        ( "AND" [cfopt]=<cfOptionName> "=" [optval]=<cfOptionVal> )*
                       ;
 '''
 
@@ -585,9 +740,15 @@ def alter_table_cf_completer(ctxt, cass):
 @completer_for('alterInstructions', 'existcol')
 def alter_table_col_completer(ctxt, cass):
     cfdef = cass.get_columnfamily(cql_dequote(ctxt.get_binding('cf')))
-    return map(maybe_cql_escape, [md.name for md in cfdef.column_metadata])
+    cols = [md.name for md in cfdef.column_metadata]
+    if cfdef.key_alias is not None:
+        cols.append(cfdef.key_alias)
+    return map(maybe_cql_escape, cols)
 
 explain_completion('alterInstructions', 'newcol', '<new_column_name>')
+
+completer_for('alterInstructions', 'optval') \
+    (create_cf_option_val_completer)
 
 # END SYNTAX/COMPLETION RULE DEFINITIONS
 
@@ -608,13 +769,10 @@ def cql_add_completer(rulename, symname):
 def cql_parse(text, startsymbol='Start'):
     tokens = CqlRuleSet.lex(text)
     tokens = cql_massage_tokens(tokens)
-    return cql_parse_tokens(tokens, startsymbol)
+    return CqlRuleSet.parse(startsymbol, tokens, init_bindings={'*SRC*': text})
 
-def cql_parse_tokens(toklist, startsymbol='Start'):
-    return CqlRuleSet.parse(startsymbol, toklist)
-
-def cql_whole_parse_tokens(toklist, startsymbol='Start'):
-    return CqlRuleSet.whole_match(startsymbol, toklist)
+def cql_whole_parse_tokens(toklist, srcstr=None, startsymbol='Start'):
+    return CqlRuleSet.whole_match(startsymbol, toklist, srcstr=srcstr)
 
 def cql_massage_tokens(toklist):
     curstmt = []
@@ -625,7 +783,7 @@ def cql_massage_tokens(toklist):
     for t in toklist:
         if t[0] == 'endline':
             if term_on_nl:
-                t = ('endtoken', '\n')
+                t = ('endtoken',) + t[1:]
             else:
                 # don't put any 'endline' tokens in output
                 continue
@@ -715,9 +873,11 @@ def cql_complete_single(text, partial, init_bindings={}, ignore_case=True, start
         partial = prefix + partial
     if tokens and tokens[-1][0] == 'unclosedComment':
         return []
+    bindings['partial'] = partial
+    bindings['*SRC*'] = text
 
     # find completions for the position
-    completions = CqlRuleSet.complete(startsymbol, tokens, init_bindings)
+    completions = CqlRuleSet.complete(startsymbol, tokens, bindings)
 
     hints, strcompletes = list_bifilter(pylexotron.is_hint, completions)
 
@@ -742,6 +902,10 @@ def cql_complete_single(text, partial, init_bindings={}, ignore_case=True, start
         # line and not part of the word under completion, and readline
         # fills in the closing quote for us.
         candidates = [cql_escape(cql_dequote(c))[len(prefix)+1:-1] for c in candidates]
+
+        # the above process can result in an empty string; this doesn't help for
+        # completions
+        candidates = filter(None, candidates)
 
     # prefix a space when desirable for pleasant cql formatting
     if tokens:

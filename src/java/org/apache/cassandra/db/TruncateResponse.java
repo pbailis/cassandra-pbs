@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,16 +15,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.db;
 
-import java.io.*;
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
 
 import org.apache.cassandra.io.IVersionedSerializer;
-import org.apache.cassandra.io.util.FastByteArrayOutputStream;
-import org.apache.cassandra.net.Message;
-import org.apache.cassandra.utils.FBUtilities;
-
+import org.apache.cassandra.net.MessageOut;
+import org.apache.cassandra.net.MessagingService;
 
 /**
  * This message is sent back the truncate operation and basically specifies if
@@ -32,32 +31,23 @@ import org.apache.cassandra.utils.FBUtilities;
  */
 public class TruncateResponse
 {
-    private static TruncateResponseSerializer serializer_ = new TruncateResponseSerializer();
-
-    public static TruncateResponseSerializer serializer()
-    {
-        return serializer_;
-    }
+    public static final TruncateResponseSerializer serializer = new TruncateResponseSerializer();
 
     public final String keyspace;
     public final String columnFamily;
     public final boolean success;
 
-
-    public static Message makeTruncateResponseMessage(Message original, TruncateResponse truncateResponseMessage)
-            throws IOException
+    public TruncateResponse(String keyspace, String columnFamily, boolean success)
     {
-    	FastByteArrayOutputStream bos = new FastByteArrayOutputStream();
-        DataOutputStream dos = new DataOutputStream(bos);
-        TruncateResponse.serializer().serialize(truncateResponseMessage, dos, original.getVersion());
-        return original.getReply(FBUtilities.getBroadcastAddress(), bos.toByteArray(), original.getVersion());
+        this.keyspace = keyspace;
+        this.columnFamily = columnFamily;
+        this.success = success;
     }
 
-    public TruncateResponse(String keyspace, String columnFamily, boolean success) {
-		this.keyspace = keyspace;
-		this.columnFamily = columnFamily;
-		this.success = success;
-	}
+    public MessageOut<TruncateResponse> createMessage()
+    {
+        return new MessageOut<TruncateResponse>(MessagingService.Verb.REQUEST_RESPONSE, this, serializer);
+    }
 
     public static class TruncateResponseSerializer implements IVersionedSerializer<TruncateResponse>
     {
@@ -76,9 +66,11 @@ public class TruncateResponse
             return new TruncateResponse(keyspace, columnFamily, success);
         }
 
-        public long serializedSize(TruncateResponse truncateResponse, int version)
+        public long serializedSize(TruncateResponse tr, int version)
         {
-            throw new UnsupportedOperationException();
+            return TypeSizes.NATIVE.sizeof(tr.keyspace)
+                 + TypeSizes.NATIVE.sizeof(tr.columnFamily)
+                 + TypeSizes.NATIVE.sizeof(tr.success);
         }
     }
 }

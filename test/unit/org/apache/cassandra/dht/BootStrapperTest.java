@@ -22,26 +22,32 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.HashMap;
+import java.util.Set;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 
-import org.apache.cassandra.CleanupHelper;
-import org.apache.cassandra.config.Schema;
-import org.apache.commons.lang.StringUtils;
-import static org.junit.Assert.assertEquals;
 import org.junit.Test;
 
-import com.google.common.collect.Multimap;
-
+import org.apache.cassandra.SchemaLoader;
+import org.apache.cassandra.config.Schema;
 import org.apache.cassandra.db.Table;
 import org.apache.cassandra.gms.ApplicationState;
+import org.apache.cassandra.gms.Gossiper;
 import org.apache.cassandra.gms.IFailureDetectionEventListener;
 import org.apache.cassandra.gms.IFailureDetector;
 import org.apache.cassandra.locator.TokenMetadata;
 import org.apache.cassandra.service.StorageService;
+import org.apache.cassandra.streaming.OperationType;
 import org.apache.cassandra.utils.FBUtilities;
 
-public class BootStrapperTest extends CleanupHelper
+import static org.junit.Assert.*;
+
+import static org.junit.Assert.assertEquals;
+
+public class BootStrapperTest extends SchemaLoader
 {
     @Test
     public void testTokenRoundtrip() throws Exception
@@ -50,30 +56,40 @@ public class BootStrapperTest extends CleanupHelper
         // fetch a bootstrap token from the local node
         assert BootStrapper.getBootstrapTokenFrom(FBUtilities.getBroadcastAddress()) != null;
     }
-    
+
     @Test
     public void testMulitipleAutomaticBootstraps() throws IOException
     {
         StorageService ss = StorageService.instance;
         generateFakeEndpoints(5);
-        InetAddress[] addrs = new InetAddress[] 
+        InetAddress[] addrs = new InetAddress[]
         {
-            InetAddress.getByName("127.0.0.2"),  
-            InetAddress.getByName("127.0.0.3"),  
-            InetAddress.getByName("127.0.0.4"),  
-            InetAddress.getByName("127.0.0.5"),  
+            InetAddress.getByName("127.0.0.2"),
+            InetAddress.getByName("127.0.0.3"),
+            InetAddress.getByName("127.0.0.4"),
+            InetAddress.getByName("127.0.0.5"),
         };
         InetAddress[] bootstrapAddrs = new InetAddress[]
         {
-            InetAddress.getByName("127.0.0.12"),  
-            InetAddress.getByName("127.0.0.13"),  
-            InetAddress.getByName("127.0.0.14"),  
-            InetAddress.getByName("127.0.0.15"),  
+            InetAddress.getByName("127.0.0.12"),
+            InetAddress.getByName("127.0.0.13"),
+            InetAddress.getByName("127.0.0.14"),
+            InetAddress.getByName("127.0.0.15"),
+        };
+        UUID[] bootstrapHostIds = new UUID[]
+        {
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
         };
         Map<InetAddress, Double> load = new HashMap<InetAddress, Double>();
         for (int i = 0; i < addrs.length; i++)
+        {
+            Gossiper.instance.initializeNodeUnsafe(addrs[i], 1);
             load.put(addrs[i], (double)i+2);
-        
+        }
+
         // give every node a bootstrap source.
         for (int i = 3; i >=0; i--)
         {
@@ -81,28 +97,32 @@ public class BootStrapperTest extends CleanupHelper
             assert bootstrapSource != null;
             assert bootstrapSource.equals(addrs[i]) : String.format("expected %s but got %s for %d", addrs[i], bootstrapSource, i);
             assert !ss.getTokenMetadata().getBootstrapTokens().containsValue(bootstrapSource);
-            
+
             Range<Token> range = ss.getPrimaryRangeForEndpoint(bootstrapSource);
             Token token = StorageService.getPartitioner().midpoint(range.left, range.right);
             assert range.contains(token);
-            ss.onChange(bootstrapAddrs[i], ApplicationState.STATUS, StorageService.instance.valueFactory.bootstrapping(token));
+            ss.onChange(bootstrapAddrs[i],
+                        ApplicationState.STATUS,
+                        StorageService.instance.valueFactory.bootstrapping(token, bootstrapHostIds[i]));
         }
-        
+
         // any further attempt to bootsrtap should fail since every node in the cluster is splitting.
         try
         {
             BootStrapper.getBootstrapSource(ss.getTokenMetadata(), load);
             throw new AssertionError("This bootstrap should have failed.");
         }
-        catch (RuntimeException ex) 
+        catch (RuntimeException ex)
         {
             // success!
         }
-        
+
         // indicate that one of the nodes is done. see if the node it was bootstrapping from is still available.
         Range<Token> range = ss.getPrimaryRangeForEndpoint(addrs[2]);
         Token token = StorageService.getPartitioner().midpoint(range.left, range.right);
-        ss.onChange(bootstrapAddrs[2], ApplicationState.STATUS, StorageService.instance.valueFactory.normal(token));
+        ss.onChange(bootstrapAddrs[2],
+                    ApplicationState.STATUS,
+                    StorageService.instance.valueFactory.normal(token, bootstrapHostIds[2]));
         load.put(bootstrapAddrs[2], 0d);
         InetAddress addr = BootStrapper.getBootstrapSource(ss.getTokenMetadata(), load);
         assert addr != null && addr.equals(addrs[2]);
@@ -134,7 +154,9 @@ public class BootStrapperTest extends CleanupHelper
         Range<Token> range5 = ss.getPrimaryRangeForEndpoint(five);
         Token fakeToken = StorageService.getPartitioner().midpoint(range5.left, range5.right);
         assert range5.contains(fakeToken);
-        ss.onChange(myEndpoint, ApplicationState.STATUS, StorageService.instance.valueFactory.bootstrapping(fakeToken));
+        ss.onChange(myEndpoint,
+                    ApplicationState.STATUS,
+                    StorageService.instance.valueFactory.bootstrapping(fakeToken, UUID.randomUUID()));
         tmd = ss.getTokenMetadata();
 
         InetAddress source4 = BootStrapper.getBootstrapSource(tmd, load);
@@ -154,7 +176,7 @@ public class BootStrapperTest extends CleanupHelper
         }
     }
 
-    private void testSourceTargetComputation(String table, int numOldNodes, int replicationFactor) throws UnknownHostException
+    private RangeStreamer testSourceTargetComputation(String table, int numOldNodes, int replicationFactor) throws UnknownHostException
     {
         StorageService ss = StorageService.instance;
 
@@ -164,17 +186,7 @@ public class BootStrapperTest extends CleanupHelper
 
         TokenMetadata tmd = ss.getTokenMetadata();
         assertEquals(numOldNodes, tmd.sortedTokens().size());
-        BootStrapper b = new BootStrapper(myEndpoint, myToken, tmd);
-        Multimap<Range<Token>, InetAddress> res = b.getRangesWithSources(table);
-        
-        int transferCount = 0;
-        for (Map.Entry<Range<Token>, Collection<InetAddress>> e : res.asMap().entrySet())
-        {
-            assert e.getValue() != null && e.getValue().size() > 0 : StringUtils.join(e.getValue(), ", ");
-            transferCount++;
-        }
-
-        assertEquals(replicationFactor, transferCount);
+        RangeStreamer s = new RangeStreamer(tmd, myEndpoint, OperationType.BOOTSTRAP);
         IFailureDetector mockFailureDetector = new IFailureDetector()
         {
             public boolean isAlive(InetAddress ep)
@@ -187,14 +199,37 @@ public class BootStrapperTest extends CleanupHelper
             public void registerFailureDetectionEventListener(IFailureDetectionEventListener listener) { throw new UnsupportedOperationException(); }
             public void unregisterFailureDetectionEventListener(IFailureDetectionEventListener listener) { throw new UnsupportedOperationException(); }
             public void remove(InetAddress ep) { throw new UnsupportedOperationException(); }
+            public void forceConviction(InetAddress ep) { throw new UnsupportedOperationException(); }
             public void clear(InetAddress ep) { throw new UnsupportedOperationException(); }
         };
-        Multimap<InetAddress, Range<Token>> temp = BootStrapper.getWorkMap(res, mockFailureDetector);
+        s.addSourceFilter(new RangeStreamer.FailureDetectorSourceFilter(mockFailureDetector));
+        s.addRanges(table, Table.open(table).getReplicationStrategy().getPendingAddressRanges(tmd, myToken, myEndpoint));
+
+        Collection<Map.Entry<InetAddress, Collection<Range<Token>>>> toFetch = s.toFetch().get(table);
+
+        // Check we get get RF new ranges in total
+        Set<Range<Token>> ranges = new HashSet<Range<Token>>();
+        for (Map.Entry<InetAddress, Collection<Range<Token>>> e : toFetch)
+            ranges.addAll(e.getValue());
+
+        assertEquals(replicationFactor, ranges.size());
+
         // there isn't any point in testing the size of these collections for any specific size.  When a random partitioner
         // is used, they will vary.
-        assert temp.keySet().size() > 0;
-        assert temp.asMap().values().iterator().next().size() > 0;
-        assert !temp.keySet().iterator().next().equals(myEndpoint);
+        assert toFetch.iterator().next().getValue().size() > 0;
+        assert !toFetch.iterator().next().getKey().equals(myEndpoint);
+        return s;
+    }
+
+    @Test
+    public void testException() throws UnknownHostException
+    {
+        String table = Schema.instance.getNonSystemTables().iterator().next();
+        int replicationFactor = Table.open(table).getReplicationStrategy().getReplicationFactor();
+        RangeStreamer streamer = testSourceTargetComputation(table, replicationFactor, replicationFactor);
+        streamer.latch = new CountDownLatch(4);
+        streamer.convict(streamer.toFetch().get(table).iterator().next().getKey(), Double.MAX_VALUE);
+        assertNotNull("Exception message not set, test failed", streamer.exceptionMessage);
     }
 
     private void generateFakeEndpoints(int numOldNodes) throws UnknownHostException

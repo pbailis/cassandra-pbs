@@ -51,7 +51,7 @@ public class TestRingCache
         ConfigHelper.setOutputColumnFamily(conf, keyspace, "Standard1");
     	ringCache = new RingCache(conf);
     }
-    
+
     private void setup(String server, int port) throws Exception
     {
         /* Establish a thrift connection to the cassandra instance */
@@ -63,9 +63,9 @@ public class TestRingCache
         thriftClient = cassandraClient;
         String seed = DatabaseDescriptor.getSeeds().iterator().next().getHostAddress();
         conf = new Configuration();
-        ConfigHelper.setPartitioner(conf, DatabaseDescriptor.getPartitioner().getClass().getName());
-        ConfigHelper.setInitialAddress(conf, seed);
-        ConfigHelper.setRpcPort(conf, Integer.toString(DatabaseDescriptor.getRpcPort()));
+        ConfigHelper.setOutputPartitioner(conf, DatabaseDescriptor.getPartitioner().getClass().getName());
+        ConfigHelper.setOutputInitialAddress(conf, seed);
+        ConfigHelper.setOutputRpcPort(conf, Integer.toString(DatabaseDescriptor.getRpcPort()));
 
     }
 
@@ -81,7 +81,7 @@ public class TestRingCache
         int minRow;
         int maxRow;
         String rowPrefix, keyspace = "Keyspace1";
-        
+
         if (args.length > 0)
         {
             keyspace = args[0];
@@ -95,7 +95,7 @@ public class TestRingCache
             maxRow = 10;
             rowPrefix = "row";
         }
-        
+
         TestRingCache tester = new TestRingCache(keyspace);
 
         for (int nRows = minRow; nRows < maxRow; nRows++)

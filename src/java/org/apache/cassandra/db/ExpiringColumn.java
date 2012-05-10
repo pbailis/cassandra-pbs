@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.db;
 
 import java.io.IOException;
@@ -75,20 +74,14 @@ public class ExpiringColumn extends Column
     }
 
     @Override
-    public boolean isMarkedForDelete()
-    {
-        return (int) (System.currentTimeMillis() / 1000 ) > localExpirationTime;
-    }
-
-    @Override
-    public int size()
+    public int size(TypeSizes typeSizes)
     {
         /*
-         * An expired column adds to a Column : 
+         * An expired column adds to a Column :
          *    4 bytes for the localExpirationTime
          *  + 4 bytes for the timeToLive
         */
-        return super.size() + DBConstants.intSize + DBConstants.intSize;
+        return super.size(typeSizes) + typeSizes.sizeof(localExpirationTime) + typeSizes.sizeof(timeToLive);
     }
 
     @Override
@@ -131,9 +124,9 @@ public class ExpiringColumn extends Column
             clonedName = allocator.clone(name);
         return new ExpiringColumn(clonedName, allocator.clone(value), timestamp, timeToLive, localExpirationTime);
     }
-    
+
     @Override
-    public String getString(AbstractType comparator)
+    public String getString(AbstractType<?> comparator)
     {
         StringBuilder sb = new StringBuilder();
         sb.append(super.getString(comparator));

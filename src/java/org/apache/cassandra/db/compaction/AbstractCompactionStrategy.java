@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,20 +15,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.db.compaction;
 
-import java.util.Collection;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.io.IOException;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.cassandra.db.ColumnFamilyStore;
+import org.apache.cassandra.dht.Range;
+import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.io.sstable.SSTable;
 import org.apache.cassandra.io.sstable.SSTableReader;
 import org.apache.cassandra.service.StorageService;
-
 
 /**
  * Pluggable compaction strategy determines how SSTables get merged.
@@ -109,4 +107,43 @@ public abstract class AbstractCompactionStrategy
      * is going to be expensive
      */
     public abstract boolean isKeyExistenceExpensive(Set<? extends SSTable> sstablesToIgnore);
+
+    /**
+     * Filters SSTables that are to be blacklisted from the given collection
+     *
+     * @param originalCandidates The collection to check for blacklisted SSTables
+     *
+     * @return list of the SSTables with blacklisted ones filtered out
+     */
+    public static List<SSTableReader> filterSuspectSSTables(Collection<SSTableReader> originalCandidates)
+    {
+        List<SSTableReader> filteredCandidates = new ArrayList<SSTableReader>();
+
+        for (SSTableReader candidate : originalCandidates)
+        {
+            if (!candidate.isMarkedSuspect())
+                filteredCandidates.add(candidate);
+        }
+
+        return filteredCandidates;
+    }
+
+    /**
+     * Returns a list of KeyScanners given sstables and a range on which to scan.
+     * The default implementation simply grab one SSTableScanner per-sstable, but overriding this method
+     * allow for a more memory efficient solution if we know the sstable don't overlap (see
+     * LeveledCompactionStrategy for instance).
+     */
+    public List<ICompactionScanner> getScanners(Collection<SSTableReader> sstables, Range<Token> range) throws IOException
+    {
+        ArrayList<ICompactionScanner> scanners = new ArrayList<ICompactionScanner>();
+        for (SSTableReader sstable : sstables)
+            scanners.add(sstable.getDirectScanner(range));
+        return scanners;
+    }
+
+    public List<ICompactionScanner> getScanners(Collection<SSTableReader> toCompact) throws IOException
+    {
+        return getScanners(toCompact, null);
+    }
 }

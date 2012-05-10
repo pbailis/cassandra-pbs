@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.thrift;
 
 import java.net.InetAddress;
@@ -23,7 +22,6 @@ import java.net.InetSocketAddress;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.TimeUnit;
 
@@ -45,10 +43,10 @@ import org.apache.thrift.transport.TTransportException;
 import org.apache.thrift.transport.TTransportFactory;
 
 /**
- * This class supports two methods for creating a Cassandra node daemon, 
- * invoking the class's main method, and using the jsvc wrapper from 
- * commons-daemon, (for more information on using this class with the 
- * jsvc wrapper, see the 
+ * This class supports two methods for creating a Cassandra node daemon,
+ * invoking the class's main method, and using the jsvc wrapper from
+ * commons-daemon, (for more information on using this class with the
+ * jsvc wrapper, see the
  * <a href="http://commons.apache.org/daemon/jsvc.html">Commons Daemon</a>
  * documentation).
  */
@@ -62,7 +60,7 @@ public class CassandraDaemon extends org.apache.cassandra.service.AbstractCassan
         AbstractCassandraDaemon.initLog4j();
     }
 
-    private static Logger logger = LoggerFactory.getLogger(CassandraDaemon.class);
+    private static final Logger logger = LoggerFactory.getLogger(CassandraDaemon.class);
     private final static String SYNC = "sync";
     private final static String ASYNC = "async";
     private final static String HSHA = "hsha";
@@ -132,17 +130,17 @@ public class CassandraDaemon extends org.apache.cassandra.service.AbstractCassan
             TTransportFactory inTransportFactory = new TFramedTransport.Factory(tFramedTransportSize);
             TTransportFactory outTransportFactory = new TFramedTransport.Factory(tFramedTransportSize);
             logger.info("Using TFastFramedTransport with a max frame size of {} bytes.", tFramedTransportSize);
-            
+
             if (DatabaseDescriptor.getRpcServerType().equalsIgnoreCase(SYNC))
-            {                
+            {
                 TServerTransport serverTransport;
                 try
                 {
-                    serverTransport = new TCustomServerSocket(new InetSocketAddress(listenAddr, listenPort), 
-                                                              DatabaseDescriptor.getRpcKeepAlive(), 
+                    serverTransport = new TCustomServerSocket(new InetSocketAddress(listenAddr, listenPort),
+                                                              DatabaseDescriptor.getRpcKeepAlive(),
                                                               DatabaseDescriptor.getRpcSendBufferSize(),
                                                               DatabaseDescriptor.getRpcRecvBufferSize());
-                } 
+                }
                 catch (TTransportException e)
                 {
                     throw new RuntimeException(String.format("Unable to create thrift socket to %s:%s", listenAddr, listenPort), e);
@@ -166,10 +164,10 @@ public class CassandraDaemon extends org.apache.cassandra.service.AbstractCassan
                 try
                 {
                     serverTransport = new TCustomNonblockingServerSocket(new InetSocketAddress(listenAddr, listenPort),
-                                                                             DatabaseDescriptor.getRpcKeepAlive(), 
+                                                                             DatabaseDescriptor.getRpcKeepAlive(),
                                                                              DatabaseDescriptor.getRpcSendBufferSize(),
                                                                              DatabaseDescriptor.getRpcRecvBufferSize());
-                } 
+                }
                 catch (TTransportException e)
                 {
                     throw new RuntimeException(String.format("Unable to create thrift socket to %s:%s", listenAddr, listenPort), e);
@@ -186,15 +184,15 @@ public class CassandraDaemon extends org.apache.cassandra.service.AbstractCassan
                                                                                                      .processor(processor);
                     logger.info(String.format("Using non-blocking/asynchronous thrift server on %s : %s", listenAddr, listenPort));
                     serverEngine = new CustomTNonBlockingServer(serverArgs);
-                } 
+                }
                 else if (DatabaseDescriptor.getRpcServerType().equalsIgnoreCase(HSHA))
                 {
                     // This is NIO selector service but the invocation will be Multi-Threaded with the Executor service.
                     ExecutorService executorService = new JMXEnabledThreadPoolExecutor(DatabaseDescriptor.getRpcMinThreads(),
                                                                                        DatabaseDescriptor.getRpcMaxThreads(),
-                                                                                       60L, 
+                                                                                       60L,
                                                                                        TimeUnit.SECONDS,
-                                                                                       new SynchronousQueue<Runnable>(), 
+                                                                                       new SynchronousQueue<Runnable>(),
                                                                                        new NamedThreadFactory("RPC-Thread"), "RPC-THREAD-POOL");
                     TNonblockingServer.Args serverArgs = new TNonblockingServer.Args(serverTransport).inputTransportFactory(inTransportFactory)
                                                                                        .outputTransportFactory(outTransportFactory)

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.utils;
 
 import java.io.*;
@@ -33,11 +32,9 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
-
 import com.google.common.base.Joiner;
 import com.google.common.collect.AbstractIterator;
+import org.apache.commons.lang.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,27 +42,31 @@ import org.apache.cassandra.cache.IRowCacheProvider;
 import org.apache.cassandra.concurrent.CreationTimeAwareFuture;
 import org.apache.cassandra.config.ConfigurationException;
 import org.apache.cassandra.config.DatabaseDescriptor;
+import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.db.DecoratedKey;
 import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.util.DataOutputBuffer;
-import org.apache.cassandra.locator.PropertyFileSnitch;
 import org.apache.cassandra.net.IAsyncResult;
 import org.apache.thrift.TBase;
 import org.apache.thrift.TDeserializer;
 import org.apache.thrift.TException;
 import org.apache.thrift.TSerializer;
+import org.codehaus.jackson.JsonFactory;
+import org.codehaus.jackson.map.ObjectMapper;
 
 public class FBUtilities
 {
-    private static Logger logger_ = LoggerFactory.getLogger(FBUtilities.class);
+    private static final Logger logger = LoggerFactory.getLogger(FBUtilities.class);
+
+    private static ObjectMapper jsonMapper = new ObjectMapper(new JsonFactory());
 
     public static final BigInteger TWO = new BigInteger("2");
 
-    private static volatile InetAddress localInetAddress_;
-    private static volatile InetAddress broadcastInetAddress_;
+    private static volatile InetAddress localInetAddress;
+    private static volatile InetAddress broadcastInetAddress;
 
     private static final ThreadLocal<MessageDigest> localMD5Digest = new ThreadLocal<MessageDigest>()
     {
@@ -118,29 +119,14 @@ public class FBUtilities
     }
 
     /**
-     * Parses a string representing either a fraction, absolute value or percentage.
-     */
-    public static double parseDoubleOrPercent(String value)
-    {
-        if (value.endsWith("%"))
-        {
-            return Double.parseDouble(value.substring(0, value.length() - 1)) / 100;
-        }
-        else
-        {
-            return Double.parseDouble(value);
-        }
-    }
-
-    /**
      * Please use getBroadcastAddress instead. You need this only when you have to listen/connect.
      */
     public static InetAddress getLocalAddress()
     {
-        if (localInetAddress_ == null)
+        if (localInetAddress == null)
             try
             {
-                localInetAddress_ = DatabaseDescriptor.getListenAddress() == null
+                localInetAddress = DatabaseDescriptor.getListenAddress() == null
                                     ? InetAddress.getLocalHost()
                                     : DatabaseDescriptor.getListenAddress();
             }
@@ -148,37 +134,16 @@ public class FBUtilities
             {
                 throw new RuntimeException(e);
             }
-        return localInetAddress_;
+        return localInetAddress;
     }
 
     public static InetAddress getBroadcastAddress()
     {
-        if (broadcastInetAddress_ == null)
-            broadcastInetAddress_ = DatabaseDescriptor.getBroadcastAddress() == null
-                                ? getLocalAddress()
-                                : DatabaseDescriptor.getBroadcastAddress();
-        return broadcastInetAddress_;
-    }
-
-    /**
-     * @param fractOrAbs A double that may represent a fraction or absolute value.
-     * @param total If fractionOrAbs is a fraction, the total to take the fraction from
-     * @return An absolute value which may be larger than the total.
-     */
-    public static long absoluteFromFraction(double fractOrAbs, long total)
-    {
-        if (fractOrAbs < 0)
-            throw new UnsupportedOperationException("unexpected negative value " + fractOrAbs);
-
-        if (0 < fractOrAbs && fractOrAbs <= 1)
-        {
-            // fraction
-            return Math.max(1, (long)(fractOrAbs * total));
-        }
-
-        // absolute
-        assert fractOrAbs >= 1 || fractOrAbs == 0;
-        return (long)fractOrAbs;
+        if (broadcastInetAddress == null)
+            broadcastInetAddress = DatabaseDescriptor.getBroadcastAddress() == null
+                                 ? getLocalAddress()
+                                 : DatabaseDescriptor.getBroadcastAddress();
+        return broadcastInetAddress;
     }
 
     /**
@@ -212,85 +177,11 @@ public class FBUtilities
         return new Pair<BigInteger, Boolean>(midpoint, remainder);
     }
 
-    /**
-     * Copy bytes from int into bytes starting from offset.
-     * @param bytes Target array
-     * @param offset Offset into the array
-     * @param i Value to write
-     */
-    public static void copyIntoBytes(byte[] bytes, int offset, int i)
-    {
-        bytes[offset]   = (byte)( ( i >>> 24 ) & 0xFF );
-        bytes[offset+1] = (byte)( ( i >>> 16 ) & 0xFF );
-        bytes[offset+2] = (byte)( ( i >>> 8  ) & 0xFF );
-        bytes[offset+3] = (byte)(   i          & 0xFF );
-    }
-
-    /**
-     * @param i Write this int to an array
-     * @return 4-byte array containing the int
-     */
-    public static byte[] toByteArray(int i)
-    {
-        byte[] bytes = new byte[4];
-        copyIntoBytes(bytes, 0, i);
-        return bytes;
-    }
-
-    /**
-     * Copy bytes from long into bytes starting from offset.
-     * @param bytes Target array
-     * @param offset Offset into the array
-     * @param l Value to write
-     */
-    public static void copyIntoBytes(byte[] bytes, int offset, long l)
-    {
-        bytes[offset]   = (byte)( ( l >>> 56 ) & 0xFF );
-        bytes[offset+1] = (byte)( ( l >>> 48 ) & 0xFF );
-        bytes[offset+2] = (byte)( ( l >>> 40 ) & 0xFF );
-        bytes[offset+3] = (byte)( ( l >>> 32 ) & 0xFF );
-        bytes[offset+4] = (byte)( ( l >>> 24 ) & 0xFF );
-        bytes[offset+5] = (byte)( ( l >>> 16 ) & 0xFF );
-        bytes[offset+6] = (byte)( ( l >>> 8  ) & 0xFF );
-        bytes[offset+7] = (byte)(   l          & 0xFF );
-    }
-
-    /**
-     * @param l Write this long to an array
-     * @return 8-byte array containing the long
-     */
-    public static byte[] toByteArray(long l)
-    {
-        byte[] bytes = new byte[8];
-        copyIntoBytes(bytes, 0, l);
-        return bytes;
-    }
-
-    /**
-     * Convert the byte array to an int starting from the given offset.
-     *
-     * @param b The byte array
-     *
-     * @return The integer
-     */
-    public static int byteArrayToInt(byte[] b)
-    {
-        int value = 0;
-
-        for (int i = 0; i < 4; i++)
-        {
-            int shift = (4 - 1 - i) * 8;
-            value += (b[i] & 0x000000FF) << shift;
-        }
-
-        return value;
-    }
-
     public static int compareUnsigned(byte[] bytes1, byte[] bytes2, int offset1, int offset2, int len1, int len2)
     {
         return FastByteComparisons.compareTo(bytes1, offset1, len1, bytes2, offset2, len2);
     }
-  
+
     /**
      * @return The bitwise XOR of the inputs. The output will be the same length as the
      * longer input, but if either input is null, the output will be null.
@@ -319,15 +210,18 @@ public class FBUtilities
     {
         byte[] result = hash(data);
         BigInteger hash = new BigInteger(result);
-        return hash.abs();        
+        return hash.abs();
     }
 
     public static byte[] hash(ByteBuffer... data)
     {
         MessageDigest messageDigest = localMD5Digest.get();
-        for(ByteBuffer block : data)
+        for (ByteBuffer block : data)
         {
-            messageDigest.update(block.duplicate());
+            if (block.hasArray())
+                messageDigest.update(block.array(), block.position(), block.remaining());
+            else
+                messageDigest.update(block.duplicate());
         }
 
         return messageDigest.digest();
@@ -341,24 +235,9 @@ public class FBUtilities
         }
     }
 
-    public static void atomicSetMax(AtomicInteger atomic, int i)
+    public static void renameWithOutConfirm(String tmpFilename, String filename) throws IOException
     {
-        while (true)
-        {
-            int j = atomic.get();
-            if (j >= i || atomic.compareAndSet(j, i))
-                break;
-        }
-    }
-
-    public static void atomicSetMax(AtomicLong atomic, long i)
-    {
-        while (true)
-        {
-            long j = atomic.get();
-            if (j >= i || atomic.compareAndSet(j, i))
-                break;
-        }
+        new File(tmpFilename).renameTo(new File(filename));
     }
 
     public static void serialize(TSerializer serializer, TBase struct, DataOutput out)
@@ -426,26 +305,9 @@ public class FBUtilities
         }
     }
 
-    public static int encodedUTF8Length(String st)
-    {
-        int strlen = st.length();
-        int utflen = 0;
-        for (int i = 0; i < strlen; i++)
-        {
-            int c = st.charAt(i);
-            if ((c >= 0x0001) && (c <= 0x007F))
-                utflen++;
-            else if (c > 0x07FF)
-                utflen += 3;
-            else
-                utflen += 2;
-        }
-        return utflen;
-    }
-
     public static String resourceToFile(String filename) throws ConfigurationException
     {
-        ClassLoader loader = PropertyFileSnitch.class.getClassLoader();
+        ClassLoader loader = FBUtilities.class.getClassLoader();
         URL scpurl = loader.getResource(filename);
         if (scpurl == null)
             throw new ConfigurationException("unable to locate " + filename);
@@ -468,7 +330,7 @@ public class FBUtilities
         }
         catch (Exception e)
         {
-            logger_.warn("Unable to load version.properties", e);
+            logger.warn("Unable to load version.properties", e);
             return "debug version";
         }
     }
@@ -483,19 +345,22 @@ public class FBUtilities
     public static void waitOnFutures(Iterable<Future<?>> futures)
     {
         for (Future f : futures)
+            waitOnFuture(f);
+    }
+
+    public static void waitOnFuture(Future<?> future)
+    {
+        try
         {
-            try
-            {
-                f.get();
-            }
-            catch (ExecutionException ee)
-            {
-                throw new RuntimeException(ee);
-            }
-            catch (InterruptedException ie)
-            {
-                throw new AssertionError(ie);
-            }
+            future.get();
+        }
+        catch (ExecutionException ee)
+        {
+            throw new RuntimeException(ee);
+        }
+        catch (InterruptedException ie)
+        {
+            throw new AssertionError(ie);
         }
     }
 
@@ -527,10 +392,6 @@ public class FBUtilities
             catch (ExecutionException e)
             {
                 throw new RuntimeException(e);
-            }
-            catch (TimeoutException e)
-            {
-               throw e;
             }
         }
     }
@@ -637,6 +498,73 @@ public class FBUtilities
     public static <T> CloseableIterator<T> closeableIterator(Iterator<T> iterator)
     {
         return new WrappedCloseableIterator<T>(iterator);
+    }
+
+    public static Map<String, String> fromJsonMap(String json)
+    {
+        try
+        {
+            return jsonMapper.readValue(json, Map.class);
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public static List<String> fromJsonList(String json)
+    {
+        try
+        {
+            return jsonMapper.readValue(json, List.class);
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public static String json(Object object)
+    {
+        try
+        {
+            return jsonMapper.writeValueAsString(object);
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * Starts and waits for the given @param pb to finish.
+     * @throws java.io.IOException on non-zero exit code
+     */
+    public static void exec(ProcessBuilder pb) throws IOException
+    {
+        Process p = pb.start();
+        try
+        {
+            int errCode = p.waitFor();
+            if (errCode != 0)
+            {
+                BufferedReader in = new BufferedReader(new InputStreamReader(p.getInputStream()));
+                BufferedReader err = new BufferedReader(new InputStreamReader(p.getErrorStream()));
+                StringBuilder sb = new StringBuilder();
+                String str;
+                while ((str = in.readLine()) != null)
+                    sb.append(str).append(System.getProperty("line.separator"));
+                while ((str = err.readLine()) != null)
+                    sb.append(str).append(System.getProperty("line.separator"));
+                throw new IOException("Exception while executing the command: "+ StringUtils.join(pb.command(), " ") +
+                                      ", command error Code: " + errCode +
+                                      ", command output: "+ sb.toString());
+            }
+        }
+        catch (InterruptedException e)
+        {
+            throw new AssertionError(e);
+        }
     }
 
     private static final class WrappedCloseableIterator<T>

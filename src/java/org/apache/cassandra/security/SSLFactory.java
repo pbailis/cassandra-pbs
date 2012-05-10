@@ -1,7 +1,4 @@
-package org.apache.cassandra.security;
-
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -10,16 +7,16 @@ package org.apache.cassandra.security;
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+package org.apache.cassandra.security;
+
 
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -48,7 +45,7 @@ import com.google.common.collect.Sets;
  */
 public final class SSLFactory
 {
-    private static final Logger logger_ = LoggerFactory.getLogger(SSLFactory.class);
+    private static final Logger logger = LoggerFactory.getLogger(SSLFactory.class);
 
     public static SSLServerSocket getServerSocket(EncryptionOptions options, InetAddress address, int port) throws IOException
     {
@@ -66,6 +63,16 @@ public final class SSLFactory
     {
         SSLContext ctx = createSSLContext(options);
         SSLSocket socket = (SSLSocket) ctx.getSocketFactory().createSocket(address, port, localAddress, localPort);
+        String[] suits = filterCipherSuites(socket.getSupportedCipherSuites(), options.cipher_suites);
+        socket.setEnabledCipherSuites(suits);
+        return socket;
+    }
+
+    /** Create a socket and connect, using any local address */
+    public static SSLSocket getSocket(EncryptionOptions options, InetAddress address, int port) throws IOException
+    {
+        SSLContext ctx = createSSLContext(options);
+        SSLSocket socket = (SSLSocket) ctx.getSocketFactory().createSocket(address, port);
         String[] suits = filterCipherSuites(socket.getSupportedCipherSuites(), options.cipher_suites);
         socket.setEnabledCipherSuites(suits);
         return socket;
@@ -116,13 +123,13 @@ public final class SSLFactory
         }
         return ctx;
     }
-    
+
     private static String[] filterCipherSuites(String[] supported, String[] desired)
     {
         Set<String> des = Sets.newHashSet(desired);
-        Set<String> return_ = Sets.intersection(Sets.newHashSet(supported), des);
-        if (des.size() > return_.size())
-            logger_.warn("Filtering out {} as it isnt supported by the socket", StringUtils.join(Sets.difference(des, return_), ","));
-        return return_.toArray(new String[return_.size()]);
+        Set<String> toReturn = Sets.intersection(Sets.newHashSet(supported), des);
+        if (des.size() > toReturn.size())
+            logger.warn("Filtering out {} as it isnt supported by the socket", StringUtils.join(Sets.difference(des, toReturn), ","));
+        return toReturn.toArray(new String[toReturn.size()]);
     }
 }

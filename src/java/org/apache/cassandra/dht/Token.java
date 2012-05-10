@@ -1,21 +1,20 @@
 /*
-* Licensed to the Apache Software Foundation (ASF) under one
-* or more contributor license agreements.  See the NOTICE file
-* distributed with this work for additional information
-* regarding copyright ownership.  The ASF licenses this file
-* to you under the Apache License, Version 2.0 (the
-* "License"); you may not use this file except in compliance
-* with the License.  You may obtain a copy of the License at
-*
-*    http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing,
-* software distributed under the License is distributed on an
-* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-* KIND, either express or implied.  See the License for the
-* specific language governing permissions and limitations
-* under the License.
-*/
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.apache.cassandra.dht;
 
 import java.io.DataInput;
@@ -25,6 +24,7 @@ import java.io.Serializable;
 import java.nio.ByteBuffer;
 
 import org.apache.cassandra.config.ConfigurationException;
+import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.db.RowPosition;
 import org.apache.cassandra.io.ISerializer;
 import org.apache.cassandra.service.StorageService;
@@ -34,16 +34,9 @@ public abstract class Token<T> implements RingPosition<Token<T>>, Serializable
 {
     private static final long serialVersionUID = 1L;
 
-    private static final TokenSerializer serializer = new TokenSerializer();
-    public static TokenSerializer serializer()
-    {
-        return serializer;
-    }
+    public static final TokenSerializer serializer = new TokenSerializer();
 
     public final T token;
-
-    private final transient KeyBound minimumBound = new KeyBound(true);
-    private final transient KeyBound maximumBound = new KeyBound(false);
 
     protected Token(T token)
     {
@@ -106,9 +99,11 @@ public abstract class Token<T> implements RingPosition<Token<T>>, Serializable
             return p.getTokenFactory().fromByteArray(ByteBuffer.wrap(bytes));
         }
 
-        public long serializedSize(Token object)
+        public long serializedSize(Token object, TypeSizes typeSizes)
         {
-            throw new UnsupportedOperationException();
+            IPartitioner p = StorageService.getPartitioner();
+            ByteBuffer b = p.getTokenFactory().toByteArray(object);
+            return TypeSizes.NATIVE.sizeof(b.remaining()) + b.remaining();
         }
     }
 
@@ -143,7 +138,7 @@ public abstract class Token<T> implements RingPosition<Token<T>>, Serializable
      */
     public KeyBound minKeyBound(IPartitioner partitioner)
     {
-        return minimumBound;
+        return new KeyBound(this, true);
     }
 
     public KeyBound minKeyBound()
@@ -161,8 +156,8 @@ public abstract class Token<T> implements RingPosition<Token<T>>, Serializable
          * maxKeyBound for the minimun token.
          */
         if (isMinimum(partitioner))
-            return minimumBound;
-        return maximumBound;
+            return minKeyBound();
+        return new KeyBound(this, false);
     }
 
     public KeyBound maxKeyBound()
@@ -170,7 +165,7 @@ public abstract class Token<T> implements RingPosition<Token<T>>, Serializable
         return maxKeyBound(StorageService.getPartitioner());
     }
 
-    public <T extends RingPosition> T asSplitValue(Class<T> klass)
+    public <T extends RingPosition> T upperBound(Class<T> klass)
     {
         if (klass.equals(getClass()))
             return (T)this;
@@ -178,18 +173,20 @@ public abstract class Token<T> implements RingPosition<Token<T>>, Serializable
             return (T)maxKeyBound();
     }
 
-    public class KeyBound extends RowPosition
+    public static class KeyBound extends RowPosition
     {
+        private final Token token;
         public final boolean isMinimumBound;
 
-        private KeyBound(boolean isMinimumBound)
+        private KeyBound(Token t, boolean isMinimumBound)
         {
+            this.token = t;
             this.isMinimumBound = isMinimumBound;
         }
 
         public Token getToken()
         {
-            return Token.this;
+            return token;
         }
 
         public int compareTo(RowPosition pos)
@@ -201,8 +198,10 @@ public abstract class Token<T> implements RingPosition<Token<T>>, Serializable
             if (cmp != 0)
                 return cmp;
 
-            // We've already eliminated the == case
-            return isMinimumBound ? -1 : 1;
+            if (isMinimumBound)
+                return ((pos instanceof KeyBound) && ((KeyBound)pos).isMinimumBound) ? 0 : -1;
+            else
+                return ((pos instanceof KeyBound) && !((KeyBound)pos).isMinimumBound) ? 0 : 1;
         }
 
         public boolean isMinimum(IPartitioner partitioner)
@@ -224,7 +223,7 @@ public abstract class Token<T> implements RingPosition<Token<T>>, Serializable
                 return false;
 
             KeyBound other = (KeyBound)obj;
-            return getToken().equals(other.getToken());
+            return token.equals(other.token) && isMinimumBound == other.isMinimumBound;
         }
 
         @Override

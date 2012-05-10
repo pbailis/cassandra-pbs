@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.gms;
 
 import java.util.BitSet;
@@ -30,8 +29,8 @@ import java.util.Random;
 
 class PureRandom extends Random
 {
-    private BitSet bs_ = new BitSet();
-    private int lastUb_;
+    private final BitSet bs = new BitSet();
+    private int lastUb;
 
     PureRandom()
     {
@@ -40,32 +39,32 @@ class PureRandom extends Random
 
     public int nextInt(int ub)
     {
-    	if (ub <= 0)
-    		throw new IllegalArgumentException("ub must be positive");
+        if (ub <= 0)
+            throw new IllegalArgumentException("ub must be positive");
 
-        if ( lastUb_ !=  ub )
+        if (lastUb !=  ub)
         {
-            bs_.clear();
-            lastUb_ = ub;
+            bs.clear();
+            lastUb = ub;
         }
-        else if(bs_.cardinality() == ub)
+        else if(bs.cardinality() == ub)
         {
-        	bs_.clear();
+            bs.clear();
         }
 
         int value = super.nextInt(ub);
-        while ( bs_.get(value) )
+        while ( bs.get(value) )
         {
             value = super.nextInt(ub);
         }
-        bs_.set(value);
+        bs.set(value);
         return value;
     }
 
     public static void main(String[] args) throws Throwable
     {
-    	Random pr = new PureRandom();
-        int ubs[] = new int[] { 2, 3, 1, 10, 5, 0};
+        Random pr = new PureRandom();
+        int ubs[] = new int[]{ 2, 3, 1, 10, 5, 0 };
 
         for (int ub : ubs)
         {

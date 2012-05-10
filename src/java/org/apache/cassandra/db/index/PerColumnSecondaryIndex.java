@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -31,33 +31,33 @@ public abstract class PerColumnSecondaryIndex extends SecondaryIndex
 {
     /**
      * Delete a column from the index
-     * 
+     *
      * @param valueKey the column value which is used as the index key
      * @param rowKey the underlying row key which is indexed
      * @param col all the column info
      */
-    public abstract void deleteColumn(DecoratedKey<?> valueKey, ByteBuffer rowKey, IColumn col) throws IOException;
-    
+    public abstract void deleteColumn(DecoratedKey valueKey, ByteBuffer rowKey, IColumn col) throws IOException;
+
     /**
      * insert a column to the index
-     * 
+     *
      * @param valueKey the column value which is used as the index key
      * @param rowKey the underlying row key which is indexed
      * @param col all the column info
      */
-    public abstract void insertColumn(DecoratedKey<?> valueKey, ByteBuffer rowKey, IColumn col) throws IOException;
-    
+    public abstract void insertColumn(DecoratedKey valueKey, ByteBuffer rowKey, IColumn col) throws IOException;
+
     /**
      * update a column from the index
-     * 
+     *
      * @param valueKey the column value which is used as the index key
      * @param rowKey the underlying row key which is indexed
      * @param col all the column info
      */
-    public abstract void updateColumn(DecoratedKey<?> valueKey, ByteBuffer rowKey, IColumn col) throws IOException;
-    
+    public abstract void updateColumn(DecoratedKey valueKey, ByteBuffer rowKey, IColumn col) throws IOException;
+
     public String getNameForSystemTable(ByteBuffer column)
     {
-        return getIndexName();   
+        return getIndexName();
     }
 }

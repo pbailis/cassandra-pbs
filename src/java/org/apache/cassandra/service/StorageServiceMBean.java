@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.service;
 
 import java.io.IOException;
@@ -28,10 +27,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 
 import org.apache.cassandra.config.ConfigurationException;
-import org.apache.cassandra.dht.Range;
-import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.thrift.InvalidRequestException;
-import org.apache.cassandra.thrift.TokenRange;
 import org.apache.cassandra.thrift.UnavailableException;
 
 
@@ -88,17 +84,17 @@ public interface StorageServiceMBean
     public String getReleaseVersion();
 
     /**
+     * Fetch a string representation of the current Schema version.
+     * @return A string representation of the Schema version.
+     */
+    public String getSchemaVersion();
+
+
+    /**
      * Get the list of all data file locations from conf
      * @return String array of all locations
      */
     public String[] getAllDataFileLocations();
-
-    /**
-     * Get the list of data file locations for a given table
-     * @param table the table to get locations for.
-     * @return String array of all locations
-     */
-    public String[] getAllDataFileLocationsForTable(String table);
 
     /**
      * Get location of the commit log
@@ -118,7 +114,7 @@ public interface StorageServiceMBean
      *
      * @return mapping of ranges to end points
      */
-    public Map<Range<Token>, List<String>> getRangeToEndpointMap(String keyspace);
+    public Map<List<String>, List<String>> getRangeToEndpointMap(String keyspace);
 
     /**
      * Retrieve a map of range to rpc addresses that describe the ring topology
@@ -126,7 +122,7 @@ public interface StorageServiceMBean
      *
      * @return mapping of ranges to rpc addresses
      */
-    public Map<Range<Token>, List<String>> getRangeToRpcaddressMap(String keyspace);
+    public Map<List<String>, List<String>> getRangeToRpcaddressMap(String keyspace);
 
     /**
      * The same as {@code describeRing(String)} but converts TokenRange to the String for JMX compatibility
@@ -140,19 +136,30 @@ public interface StorageServiceMBean
     public List <String> describeRingJMX(String keyspace) throws InvalidRequestException;
 
     /**
+     * Returns the local node's primary range.
+     */
+    public List<String> getPrimaryRange();
+
+    /**
      * Retrieve a map of pending ranges to endpoints that describe the ring topology
      * @param keyspace the keyspace to get the pending range map for.
      * @return a map of pending ranges to endpoints
      */
-    public Map<Range<Token>, List<String>> getPendingRangeToEndpointMap(String keyspace);
+    public Map<List<String>, List<String>> getPendingRangeToEndpointMap(String keyspace);
 
     /**
      * Retrieve a map of tokens to endpoints, including the bootstrapping
      * ones.
      *
-     * @return a map of tokens to endpoints
+     * @return a map of tokens to endpoints in ascending order
      */
-    public Map<Token, String> getTokenToEndpointMap();
+    public Map<String, String> getTokenToEndpointMap();
+
+    /** Retrieve this hosts unique ID */
+    public String getLocalHostId();
+
+    /** Retrieve the mapping of endpoint to host ID */
+    public Map<String, String> getHostIdMap();
 
     /**
      * Numeric load value.
@@ -191,6 +198,15 @@ public interface StorageServiceMBean
      * @param tableNames the name of the tables to snapshot; empty means "all."
      */
     public void takeSnapshot(String tag, String... tableNames) throws IOException;
+
+    /**
+     * Takes the snapshot of a specific column family. A snapshot name must be specified.
+     *
+     * @param tableName the keyspace which holds the specified column family
+     * @param columnFamilyName the column family to snapshot
+     * @param tag the tag given to the snapshot; may not be null or empty
+     */
+    public void takeColumnFamilySnapshot(String tableName, String columnFamilyName, String tag) throws IOException;
 
     /**
      * Remove the snapshot with the given name from the given tables.
@@ -238,12 +254,20 @@ public interface StorageServiceMBean
      * @param columnFamilies
      * @throws IOException
      */
-    public void forceTableRepair(String tableName, String... columnFamilies) throws IOException;
+    public void forceTableRepair(String tableName, boolean isSequential, String... columnFamilies) throws IOException;
 
     /**
      * Triggers proactive repair but only for the node primary range.
      */
-    public void forceTableRepairPrimaryRange(String tableName, String... columnFamilies) throws IOException;
+    public void forceTableRepairPrimaryRange(String tableName, boolean isSequential, String... columnFamilies) throws IOException;
+
+    /**
+     * Perform repair of a specific range.
+     *
+     * This allows incremental repair to be performed by having an external controller submitting repair jobs.
+     * Note that the provided range much be a subset of one of the node local range.
+     */
+    public void forceTableRepairRange(String beginToken, String endToken, String tableName, boolean isSequential, String... columnFamilies) throws IOException;
 
     public void forceTerminateAllRepairSessions();
 
@@ -262,7 +286,7 @@ public interface StorageServiceMBean
      * removeToken removes token (and all data associated with
      * enpoint that had it) from the ring
      */
-    public void removeToken(String token);
+    public void removeNode(String token);
 
     /**
      * Get the status of a token removal.
@@ -304,7 +328,16 @@ public interface StorageServiceMBean
      * given a list of tokens (representing the nodes in the cluster), returns
      *   a mapping from "token -> %age of cluster owned by that token"
      */
-    public Map<Token, Float> getOwnership();
+    public Map<String, Float> getOwnership();
+
+    /**
+     * Effective ownership is % of the data each node owns given the keyspace
+     * we calculate the percentage using replication factor.
+     * If Keyspace == null, this method will try to verify if all the keyspaces
+     * in the cluster have the same replication strategies and if yes then we will
+     * use the first else a empty Map is returned.
+     */
+    public Map<String, Float> effectiveOwnership(String keyspace) throws ConfigurationException;
 
     public List<String> getKeyspaces();
 
@@ -342,7 +375,7 @@ public interface StorageServiceMBean
     public boolean isJoined();
 
     public int getExceptionCount();
-    
+
     public void setStreamThroughputMbPerSec(int value);
     public int getStreamThroughputMbPerSec();
 
@@ -351,6 +384,15 @@ public interface StorageServiceMBean
 
     public boolean isIncrementalBackupsEnabled();
     public void setIncrementalBackupsEnabled(boolean value);
+
+    /**
+     * Initiate a process of streaming data for which we are responsible from other nodes. It is similar to bootstrap
+     * except meant to be used on a node which is already in the cluster (typically containing no data) as an
+     * alternative to running repair.
+     *
+     * @param sourceDc Name of DC from which to select sources for streaming or null to pick any node
+     */
+    public void rebuild(String sourceDc);
 
     public void bulkLoad(String directory);
 
@@ -363,4 +405,19 @@ public interface StorageServiceMBean
      * @param cfName The ColumnFamily name where SSTables belong
      */
     public void loadNewSSTables(String ksName, String cfName);
+
+    /**
+     * Return a List of Tokens representing a sample of keys
+     * across all ColumnFamilyStores
+     *
+     * @return set of Tokens as Strings
+     */
+    public List<String> getRangeKeySample();
+
+    /**
+     * rebuild the specified indexes
+     */
+    public void rebuildSecondaryIndex(String ksName, String cfName, String... idxNames);
+
+    public void resetLocalSchema() throws IOException;
 }

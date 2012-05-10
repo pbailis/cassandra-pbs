@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -7,18 +7,21 @@
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.apache.cassandra.db.compaction;
 
 import java.io.Serializable;
+import java.util.HashMap;
+import java.util.Map;
+
+import org.apache.cassandra.service.StorageService;
 
 /** Implements serializable to allow structured info to be returned via JMX. */
 public final class CompactionInfo implements Serializable
@@ -86,10 +89,24 @@ public final class CompactionInfo implements Serializable
         return buff.append(')').toString();
     }
 
+    public Map<String, String> asMap()
+    {
+        Map<String, String> ret = new HashMap<String, String>();
+        ret.put("id", Integer.toString(id));
+        ret.put("keyspace", ksname);
+        ret.put("columnfamily", cfname);
+        ret.put("bytesComplete", Long.toString(bytesComplete));
+        ret.put("totalBytes", Long.toString(totalBytes));
+        ret.put("taskType", tasktype.toString());
+        return ret;
+    }
+
     public static abstract class Holder
     {
         private volatile boolean isStopped = false;
         public abstract CompactionInfo getCompactionInfo();
+        double load = StorageService.instance.getLoad();
+        boolean reportedSeverity = false;
 
         public void stop()
         {
@@ -99,6 +116,23 @@ public final class CompactionInfo implements Serializable
         public boolean isStopped()
         {
             return isStopped;
+        }
+        /**
+         * report event on the size of the compaction.
+         */
+        public void started()
+        {
+            reportedSeverity = StorageService.instance.reportSeverity(getCompactionInfo().getTotalBytes()/load);
+        }
+
+        /**
+         * remove the event complete
+         */
+        public void finished()
+        {
+            if (reportedSeverity)
+                StorageService.instance.reportSeverity(-(getCompactionInfo().getTotalBytes()/load));            
+            reportedSeverity = false;
         }
     }
 }

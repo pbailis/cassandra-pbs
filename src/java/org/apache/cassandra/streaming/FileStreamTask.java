@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,41 +15,38 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.streaming;
 
-import java.io.*;
+import java.io.DataInputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.ning.compress.lzf.LZFOutputStream;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.gms.Gossiper;
 import org.apache.cassandra.io.compress.CompressedRandomAccessReader;
-import org.apache.cassandra.io.util.RandomAccessReader;
 import org.apache.cassandra.io.util.FileUtils;
-import org.apache.cassandra.net.Header;
-import org.apache.cassandra.net.Message;
+import org.apache.cassandra.io.util.RandomAccessReader;
+import org.apache.cassandra.net.MessageIn;
 import org.apache.cassandra.net.MessagingService;
-import org.apache.cassandra.net.OutboundTcpConnection;
-import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.Pair;
 import org.apache.cassandra.utils.Throttle;
 import org.apache.cassandra.utils.WrappedRunnable;
 
-import com.ning.compress.lzf.LZFOutputStream;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 public class FileStreamTask extends WrappedRunnable
 {
-    private static Logger logger = LoggerFactory.getLogger(FileStreamTask.class);
-    
+    private static final Logger logger = LoggerFactory.getLogger(FileStreamTask.class);
+
     public static final int CHUNK_SIZE = 64 * 1024;
-    // around 10 minutes at the default rpctimeout
-    public static final int MAX_CONNECT_ATTEMPTS = 8;
+    public static final int MAX_CONNECT_ATTEMPTS = 4;
 
     protected final StreamHeader header;
     protected final InetAddress to;
@@ -85,7 +82,7 @@ public class FileStreamTask extends WrappedRunnable
             }
         });
     }
-    
+
     public void runMayThrow() throws IOException
     {
         try
@@ -94,12 +91,25 @@ public class FileStreamTask extends WrappedRunnable
             // successfully connected: stream.
             // (at this point, if we fail, it is the receiver's job to re-request)
             stream();
-            if (StreamOutSession.get(to, header.sessionId).getFiles().size() == 0)
+
+            StreamOutSession session = StreamOutSession.get(to, header.sessionId);
+            if (session == null)
+            {
+                logger.info("Found no stream out session at end of file stream task - this is expected if the receiver went down");
+            }
+            else if (session.getFiles().size() == 0)
             {
                 // we are the last of our kind, receive the final confirmation before closing
                 receiveReply();
                 logger.info("Finished streaming session to {}", to);
             }
+        }
+        catch (IOException e)
+        {
+            StreamOutSession session = StreamOutSession.get(to, header.sessionId);
+            if (session != null)
+                session.close(false);
+            throw e;
         }
         finally
         {
@@ -185,15 +195,11 @@ public class FileStreamTask extends WrappedRunnable
         assert MessagingService.getBits(msheader, 3, 1) == 0 : "Stream received before stream reply";
         int version = MessagingService.getBits(msheader, 15, 8);
 
-        input.readInt(); // Read total size
+        if (version <= MessagingService.VERSION_11)
+            input.readInt(); // Read total size
         String id = input.readUTF();
-        Header header = Header.serializer().deserialize(input, version);
-
-        int bodySize = input.readInt();
-        byte[] body = new byte[bodySize];
-        input.readFully(body);
-        Message message = new Message(header, body, version);
-        assert message.getVerb() == StorageService.Verb.STREAM_REPLY : "Non-reply message received on stream socket";
+        MessageIn message = MessageIn.read(input, version, id);
+        assert message.verb == MessagingService.Verb.STREAM_REPLY : "Non-reply message received on stream socket";
         handler.doVerb(message, id);
     }
 
@@ -232,6 +238,7 @@ public class FileStreamTask extends WrappedRunnable
             try
             {
                 socket = MessagingService.instance().getConnectionPool(to).newSocket();
+                socket.setSoTimeout(DatabaseDescriptor.getStreamingSocketTimeout());
                 output = socket.getOutputStream();
                 input = new DataInputStream(socket.getInputStream());
                 break;
@@ -257,7 +264,8 @@ public class FileStreamTask extends WrappedRunnable
 
     protected void close() throws IOException
     {
-        output.close();
+        if (output != null)
+            output.close();
     }
 
     public String toString()

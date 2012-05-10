@@ -1,6 +1,4 @@
-package org.apache.cassandra.tools;
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,22 +6,21 @@ package org.apache.cassandra.tools;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-
+package org.apache.cassandra.tools;
 
 import java.io.IOException;
 import java.io.PrintStream;
 import java.lang.management.MemoryUsage;
+import java.net.ConnectException;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.text.DecimalFormat;
@@ -35,14 +32,14 @@ import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.service.CacheServiceMBean;
 import org.apache.cassandra.service.PBSPredictionResult;
 import org.apache.cassandra.service.PBSPredictorMBean;
+import org.apache.cassandra.service.StorageProxyMBean;
 import org.apache.commons.cli.*;
 
 import org.apache.cassandra.concurrent.JMXEnabledThreadPoolExecutorMBean;
 import org.apache.cassandra.config.ConfigurationException;
 import org.apache.cassandra.db.ColumnFamilyStoreMBean;
-import org.apache.cassandra.db.compaction.CompactionInfo;
 import org.apache.cassandra.db.compaction.CompactionManagerMBean;
-import org.apache.cassandra.dht.Token;
+import org.apache.cassandra.db.compaction.OperationType;
 import org.apache.cassandra.net.MessagingServiceMBean;
 import org.apache.cassandra.thrift.InvalidRequestException;
 import org.apache.cassandra.utils.EstimatedHistogram;
@@ -50,30 +47,34 @@ import org.apache.cassandra.utils.Pair;
 
 public class NodeCmd
 {
+    private static final Pair<String, String> SNAPSHOT_COLUMNFAMILY_OPT = new Pair<String, String>("cf", "column-family");
     private static final Pair<String, String> HOST_OPT = new Pair<String, String>("h", "host");
     private static final Pair<String, String> PORT_OPT = new Pair<String, String>("p", "port");
     private static final Pair<String, String> USERNAME_OPT = new Pair<String, String>("u",  "username");
     private static final Pair<String, String> PASSWORD_OPT = new Pair<String, String>("pw", "password");
     private static final Pair<String, String> TAG_OPT = new Pair<String, String>("t", "tag");
     private static final Pair<String, String> PRIMARY_RANGE_OPT = new Pair<String, String>("pr", "partitioner-range");
+    private static final Pair<String, String> SNAPSHOT_REPAIR_OPT = new Pair<String, String>("snapshot", "with-snapshot");
+
+    private static final String DEFAULT_HOST = "127.0.0.1";
     private static final int DEFAULT_PORT = 7199;
 
-    private static ToolOptions options = null;
+    private static final ToolOptions options = new ToolOptions();
 
-    private NodeProbe probe;
-    
+    private final NodeProbe probe;
+
     static
     {
-        options = new ToolOptions();
-
-        options.addOption(HOST_OPT,     true, "node hostname or ip address", true);
+        options.addOption(SNAPSHOT_COLUMNFAMILY_OPT, true, "only take a snapshot of the specified column family");
+        options.addOption(HOST_OPT,     true, "node hostname or ip address");
         options.addOption(PORT_OPT,     true, "remote jmx agent port number");
         options.addOption(USERNAME_OPT, true, "remote jmx agent username");
         options.addOption(PASSWORD_OPT, true, "remote jmx agent password");
         options.addOption(TAG_OPT,      true, "optional name to give a snapshot");
         options.addOption(PRIMARY_RANGE_OPT, false, "only repair the first range returned by the partitioner for the node");
+        options.addOption(SNAPSHOT_REPAIR_OPT, false, "repair one node at a time using snapshots");
     }
-    
+
     public NodeCmd(NodeProbe probe)
     {
         this.probe = probe;
@@ -97,14 +98,18 @@ public class NodeCmd
         GETCOMPACTIONTHRESHOLD,
         GETENDPOINTS,
         GOSSIPINFO,
+        IDS,
         INFO,
         INVALIDATEKEYCACHE,
         INVALIDATEROWCACHE,
         JOIN,
         MOVE,
         NETSTATS,
+        PROXYHISTOGRAMS,
+        REBUILD,
         REFRESH,
         REMOVETOKEN,
+        REMOVENODE,
         REPAIR,
         RING,
         SCRUB,
@@ -119,10 +124,13 @@ public class NodeCmd
         UPGRADESSTABLES,
         VERSION,
         DESCRIBERING,
-        PREDICTCONSISTENCY,
+        RANGEKEYSAMPLE,
+        REBUILD_INDEX,
+        RESETLOCALSCHEMA,
+        PREDICTCONSISTENCY
     }
 
-    
+
     /**
      * Prints usage information to stdout.
      */
@@ -136,10 +144,12 @@ public class NodeCmd
         addCmdHelp(header, "join", "Join the ring");
         addCmdHelp(header, "info", "Print node informations (uptime, load, ...)");
         addCmdHelp(header, "cfstats", "Print statistics on column families");
+        addCmdHelp(header, "ids", "Print list of unique host IDs");
         addCmdHelp(header, "version", "Print cassandra version");
         addCmdHelp(header, "tpstats", "Print usage statistics of thread pools");
+        addCmdHelp(header, "proxyhistograms", "Print statistic histograms for network operations");
         addCmdHelp(header, "drain", "Drain the node (stop accepting writes and flush all column families)");
-        addCmdHelp(header, "decommission", "Decommission the node");
+        addCmdHelp(header, "decommission", "Decommission the *node I am connecting to*");
         addCmdHelp(header, "compactionstats", "Print statistics on compactions");
         addCmdHelp(header, "disablegossip", "Disable gossip (effectively marking the node dead)");
         addCmdHelp(header, "enablegossip", "Reenable gossip");
@@ -149,20 +159,23 @@ public class NodeCmd
         addCmdHelp(header, "gossipinfo", "Shows the gossip information for the cluster");
         addCmdHelp(header, "invalidatekeycache", "Invalidate the key cache");
         addCmdHelp(header, "invalidaterowcache", "Invalidate the row cache");
+        addCmdHelp(header, "resetlocalschema", "Reset node's local schema and resync");
 
         // One arg
         addCmdHelp(header, "netstats [host]", "Print network information on provided host (connecting node by default)");
         addCmdHelp(header, "move <new token>", "Move node on the token ring to a new token");
-        addCmdHelp(header, "removetoken status|force|<token>", "Show status of current token removal, force completion of pending removal or remove providen token");
+        addCmdHelp(header, "removenode status|force|<ID>", "Show status of current node removal, force completion of pending removal or remove provided ID");
         addCmdHelp(header, "setcompactionthroughput <value_in_mb>", "Set the MB/s throughput cap for compaction in the system, or 0 to disable throttling.");
         addCmdHelp(header, "setstreamthroughput <value_in_mb>", "Set the MB/s throughput cap for streaming in the system, or 0 to disable throttling.");
         addCmdHelp(header, "describering [keyspace]", "Shows the token ranges info of a given keyspace.");
+        addCmdHelp(header, "rangekeysample", "Shows the sampled keys held across all keyspaces.");
+        addCmdHelp(header, "rebuild [src-dc-name]", "Rebuild data by streaming from other nodes (similarly to bootstrap)");
 
         // Two args
-        addCmdHelp(header, "snapshot [keyspaces...] -t [snapshotName]", "Take a snapshot of the specified keyspaces using optional name snapshotName");
+        addCmdHelp(header, "snapshot [keyspaces...] -cf [columnfamilyName] -t [snapshotName]", "Take a snapshot of the optionally specified column family of the specified keyspaces using optional name snapshotName");
         addCmdHelp(header, "clearsnapshot [keyspaces...] -t [snapshotName]", "Remove snapshots for the specified keyspaces. Either remove all snapshots or remove the snapshots with the given name.");
         addCmdHelp(header, "flush [keyspace] [cfnames]", "Flush one or more column family");
-        addCmdHelp(header, "repair [keyspace] [cfnames]", "Repair one or more column family (use -rp to repair only the first range returned by the partitioner)");
+        addCmdHelp(header, "repair [keyspace] [cfnames]", "Repair one or more column family (use -pr to repair only the first range returned by the partitioner)");
         addCmdHelp(header, "cleanup [keyspace] [cfnames]", "Run cleanup on one or more column family");
         addCmdHelp(header, "compact [keyspace] [cfnames]", "Force a (major) compaction on one or more column family");
         addCmdHelp(header, "scrub [keyspace] [cfnames]", "Scrub (rebuild sstables for) one or more column family");
@@ -171,6 +184,7 @@ public class NodeCmd
         addCmdHelp(header, "getcompactionthreshold <keyspace> <cfname>", "Print min and max compaction thresholds for a given column family");
         addCmdHelp(header, "cfhistograms <keyspace> <cfname>", "Print statistic histograms for a given column family");
         addCmdHelp(header, "refresh <keyspace> <cf-name>", "Load newly placed SSTables to the system without restart.");
+        addCmdHelp(header, "rebuild_index <keyspace> <cf-name> <idx1,idx1>", "a full rebuilds of native secondry index for a given column family. IndexNameExample: Standard3.IdxName,Standard3.IdxName1");
 
         // Three args
         addCmdHelp(header, "getendpoints <keyspace> <cf> <key>", "Print the end points that owns the key");
@@ -194,17 +208,16 @@ public class NodeCmd
             for (int i = cmd.length(); i < 22; ++i) sb.append(" ");
         sb.append(" - ").append(description).append("\n");
     }
-    
+
     /**
      * Write a textual representation of the Cassandra ring.
-     * 
+     *
      * @param outs the stream to write to
      */
-    public void printRing(PrintStream outs)
+    public void printRing(PrintStream outs, String keyspace)
     {
-        Map<Token, String> tokenToEndpoint = probe.getTokenToEndpointMap();
-        List<Token> sortedTokens = new ArrayList<Token>(tokenToEndpoint.keySet());
-        Collections.sort(sortedTokens);
+        Map<String, String> tokenToEndpoint = probe.getTokenToEndpointMap();
+        List<String> sortedTokens = new ArrayList<String>(tokenToEndpoint.keySet());
 
         Collection<String> liveNodes = probe.getLiveNodes();
         Collection<String> deadNodes = probe.getUnreachableNodes();
@@ -213,17 +226,28 @@ public class NodeCmd
         Collection<String> movingNodes = probe.getMovingNodes();
         Map<String, String> loadMap = probe.getLoadMap();
 
-        String format = "%-16s%-12s%-12s%-7s%-8s%-16s%-8s%-44s%n";
-        outs.printf(format, "Address", "DC", "Rack", "Status", "State", "Load", "Owns", "Token");
+        String format = "%-16s%-12s%-12s%-7s%-8s%-16s%-20s%-44s%n";
+
+        // Calculate per-token ownership of the ring
+        Map<String, Float> ownerships;
+        try
+        {
+            ownerships = probe.effectiveOwnership(keyspace);
+            outs.printf(format, "Address", "DC", "Rack", "Status", "State", "Load", "Effective-Ownership", "Token");
+        }
+        catch (ConfigurationException ex)
+        {
+            ownerships = probe.getOwnership();
+            outs.printf("Note: Ownership information does not include topology, please specify a keyspace. \n");
+            outs.printf(format, "Address", "DC", "Rack", "Status", "State", "Load", "Owns", "Token");
+        }
+
         // show pre-wrap token twice so you can always read a node's range as
         // (previous line token, current line token]
         if (sortedTokens.size() > 1)
             outs.printf(format, "", "", "", "", "", "", "", sortedTokens.get(sortedTokens.size() - 1));
 
-        // Calculate per-token ownership of the ring
-        Map<Token, Float> ownerships = probe.getOwnership();
-
-        for (Token token : sortedTokens)
+        for (String token : sortedTokens)
         {
             String primaryEndpoint = tokenToEndpoint.get(token);
             String dataCenter;
@@ -262,8 +286,22 @@ public class NodeCmd
             String load = loadMap.containsKey(primaryEndpoint)
                           ? loadMap.get(primaryEndpoint)
                           : "?";
-            String owns = new DecimalFormat("##0.00%").format(ownerships.get(token));
+            String owns = new DecimalFormat("##0.00%").format(ownerships.get(token) == null ? 0.0F : ownerships.get(token));
             outs.printf(format, primaryEndpoint, dataCenter, rack, status, state, load, owns, token);
+        }
+    }
+
+    /** Writes a table of host IDs to a PrintStream */
+    public void printHostIds(PrintStream outs)
+    {
+        System.out.print(String.format("%-16s %-7s %s%n", "Address", "Status", "Host ID"));
+        for (Map.Entry<String, String> entry : probe.getHostIdMap().entrySet())
+        {
+            String status;
+            if      (probe.getLiveNodes().contains(entry.getKey()))        status = "Up";
+            else if (probe.getUnreachableNodes().contains(entry.getKey())) status = "Down";
+            else                                                           status = "?";
+            System.out.print(String.format("%-16s %-7s %s%n", entry.getKey(), status, entry.getValue()));
         }
     }
 
@@ -293,13 +331,14 @@ public class NodeCmd
 
     /**
      * Write node information.
-     * 
+     *
      * @param outs the stream to write to
      */
     public void printInfo(PrintStream outs)
     {
         boolean gossipInitialized = probe.isInitialized();
         outs.printf("%-17s: %s%n", "Token", probe.getToken());
+        outs.printf("%-17s: %s%n", "ID", probe.getLocalHostId());
         outs.printf("%-17s: %s%n", "Gossip active", gossipInitialized);
         outs.printf("%-17s: %s%n", "Load", probe.getLoadString());
         if (gossipInitialized)
@@ -433,17 +472,29 @@ public class NodeCmd
 
     public void printCompactionStats(PrintStream outs)
     {
+        int compactionThroughput = probe.getCompactionThroughput();
         CompactionManagerMBean cm = probe.getCompactionManagerProxy();
         outs.println("pending tasks: " + cm.getPendingTasks());
         if (cm.getCompactions().size() > 0)
             outs.printf("%25s%16s%16s%16s%16s%10s%n", "compaction type", "keyspace", "column family", "bytes compacted", "bytes total", "progress");
-        for (CompactionInfo c : cm.getCompactions())
+        long remainingBytes = 0;
+        for (Map<String, String> c : cm.getCompactions())
         {
-            String percentComplete = c.getTotalBytes() == 0
+            String percentComplete = new Long(c.get("totalBytes")) == 0
                                    ? "n/a"
-                                   : new DecimalFormat("0.00").format((double) c.getBytesComplete() / c.getTotalBytes() * 100) + "%";
-            outs.printf("%25s%16s%16s%16s%16s%10s%n", c.getTaskType(), c.getKeyspace(), c.getColumnFamily(), c.getBytesComplete(), c.getTotalBytes(), percentComplete);
+                                   : new DecimalFormat("0.00").format((double) new Long(c.get("bytesComplete")) / new Long(c.get("totalBytes")) * 100) + "%";
+            outs.printf("%25s%16s%16s%16s%16s%10s%n", c.get("taskType"), c.get("keyspace"), c.get("columnfamily"), c.get("bytesComplete"), c.get("totalBytes"), percentComplete);
+            if (c.get("taskType").equals(OperationType.COMPACTION.toString()))
+                remainingBytes += (new Long(c.get("totalBytes")) - new Long(c.get("bytesComplete")));
         }
+        long remainingTimeInSecs = compactionThroughput == 0 || remainingBytes == 0
+                        ? -1 
+                        : (remainingBytes) / (long) (1024L * 1024L * compactionThroughput);
+        String remainingTime = remainingTimeInSecs < 0 
+                        ? "n/a"
+                        : String.format("%dh%02dm%02ds", remainingTimeInSecs / 3600, (remainingTimeInSecs % 3600) / 60, (remainingTimeInSecs % 60)); 
+
+        outs.printf("%25s%10s%n", "Active compaction remaining time : ", remainingTime);
     }
 
     public void printColumnFamilyStats(PrintStream outs)
@@ -517,7 +568,7 @@ public class NodeCmd
                 outs.println("\t\tSSTable count: " + cfstore.getLiveSSTableCount());
                 outs.println("\t\tSpace used (live): " + cfstore.getLiveDiskSpaceUsed());
                 outs.println("\t\tSpace used (total): " + cfstore.getTotalDiskSpaceUsed());
-                outs.println("\t\tNumber of Keys (estimate): " + cfstore.estimateKeys());				
+                outs.println("\t\tNumber of Keys (estimate): " + cfstore.estimateKeys());
                 outs.println("\t\tMemtable Columns Count: " + cfstore.getMemtableColumnsCount());
                 outs.println("\t\tMemtable Data Size: " + cfstore.getMemtableDataSize());
                 outs.println("\t\tMemtable Switch Count: " + cfstore.getMemtableSwitchCount());
@@ -538,7 +589,7 @@ public class NodeCmd
             outs.println("----------------");
         }
     }
-    
+
     public void printRemovalStatus(PrintStream outs)
     {
         outs.println("RemovalStatus: " + probe.getRemovalStatus());
@@ -571,6 +622,27 @@ public class NodeCmd
                                          (i < rrlh.length ? rrlh[i] : ""),
                                          (i < ersh.length ? ersh[i] : ""),
                                          (i < ecch.length ? ecch[i] : "")));
+        }
+    }
+    
+    private void printProxyHistograms(PrintStream output)
+    {
+        StorageProxyMBean sp = this.probe.getSpProxy();
+        long[] offsets = new EstimatedHistogram().getBucketOffsets();
+        long[] rrlh = sp.getRecentReadLatencyHistogramMicros();
+        long[] rwlh = sp.getRecentWriteLatencyHistogramMicros();
+        long[] rrnglh = sp.getRecentRangeLatencyHistogramMicros();
+
+        output.println("proxy histograms");
+        output.println(String.format("%-10s%18s%18s%18s",
+                                    "Offset", "Read Latency", "Write Latency", "Range Latency"));
+        for (int i = 0; i < offsets.length; i++)
+        {
+            output.println(String.format("%-10d%18s%18s%18s",
+                                        offsets[i],
+                                        (i < rrlh.length ? rrlh[i] : ""),
+                                        (i < rwlh.length ? rwlh[i] : ""),
+                                        (i < rrnglh.length ? rrnglh[i] : "")));
         }
     }
 
@@ -645,9 +717,10 @@ public class NodeCmd
             badUse(p.getMessage());
         }
 
-        String host = cmd.getOptionValue(HOST_OPT.left);
+        String host = cmd.hasOption(HOST_OPT.left) ? cmd.getOptionValue(HOST_OPT.left) : DEFAULT_HOST;
+
         int port = DEFAULT_PORT;
-        
+
         String portNum = cmd.getOptionValue(PORT_OPT.left);
         if (portNum != null)
         {
@@ -663,7 +736,7 @@ public class NodeCmd
 
         String username = cmd.getOptionValue(USERNAME_OPT.left);
         String password = cmd.getOptionValue(PASSWORD_OPT.left);
-        
+
         NodeProbe probe = null;
         try
         {
@@ -671,7 +744,21 @@ public class NodeCmd
         }
         catch (IOException ioe)
         {
-            err(ioe, "Error connection to remote JMX agent!");
+            Throwable inner = findInnermostThrowable(ioe);
+            if (inner instanceof ConnectException)
+            {
+                System.err.printf("Failed to connect to '%s:%d': %s\n", host, port, inner.getMessage());
+                System.exit(1);
+            }
+            else if (inner instanceof UnknownHostException)
+            {
+                System.err.printf("Cannot resolve '%s': unknown host\n", host);
+                System.exit(1);
+            }
+            else
+            {
+                err(ioe, "Error connecting to remote JMX agent!");
+            }
         }
         try
         {
@@ -691,13 +778,18 @@ public class NodeCmd
 
             // Execute the requested command.
             String[] arguments = cmd.getCommandArguments();
+            String tag;
+            String columnFamilyName = null;
 
             switch (command)
             {
-                case RING            : nodeCmd.printRing(System.out); break;
+                case RING :
+                    if (arguments.length > 0) { nodeCmd.printRing(System.out, arguments[0]); }
+                    else                      { nodeCmd.printRing(System.out, null); };
+                    break;
+
                 case INFO            : nodeCmd.printInfo(System.out); break;
                 case CFSTATS         : nodeCmd.printColumnFamilyStats(System.out); break;
-                case DECOMMISSION    : probe.decommission(); break;
                 case TPSTATS         : nodeCmd.printThreadPoolStats(System.out); break;
                 case VERSION         : nodeCmd.printReleaseVersion(System.out); break;
                 case COMPACTIONSTATS : nodeCmd.printCompactionStats(System.out); break;
@@ -706,7 +798,18 @@ public class NodeCmd
                 case DISABLETHRIFT   : probe.stopThriftServer(); break;
                 case ENABLETHRIFT    : probe.startThriftServer(); break;
                 case STATUSTHRIFT    : nodeCmd.printIsThriftServerRunning(System.out); break;
-    
+                case RESETLOCALSCHEMA: probe.resetLocalSchema(); break;
+                case IDS             : nodeCmd.printHostIds(System.out); break;
+
+                case DECOMMISSION :
+                    if (arguments.length > 0)
+                    {
+                        System.err.println("Decommission will decommission the node you are connected to and does not take arguments!");
+                        System.exit(1);
+                    }
+                    probe.decommission();
+                    break;
+
                 case DRAIN :
                     try { probe.drain(); }
                     catch (ExecutionException ee) { err(ee, "Error occured during flushing"); }
@@ -718,9 +821,11 @@ public class NodeCmd
                     break;
 
                 case SNAPSHOT :
+                    columnFamilyName = cmd.getOptionValue(SNAPSHOT_COLUMNFAMILY_OPT.left);
+                    /* FALL THRU */
                 case CLEARSNAPSHOT :
-                    String tag = cmd.getOptionValue(TAG_OPT.left);
-                    handleSnapshots(command, tag, arguments, probe);
+                    tag = cmd.getOptionValue(TAG_OPT.left);
+                    handleSnapshots(command, tag, arguments, columnFamilyName, probe);
                     break;
 
                 case MOVE :
@@ -748,11 +853,17 @@ public class NodeCmd
                     probe.setStreamThroughput(Integer.valueOf(arguments[0]));
                     break;
 
+                case REBUILD :
+                    if (arguments.length > 1) { badUse("Too many arguments."); }
+                    probe.rebuild(arguments.length == 1 ? arguments[0] : null);
+                    break;
+
+                case REMOVENODE  :
                 case REMOVETOKEN :
-                    if (arguments.length != 1) { badUse("Missing an argument for removetoken (either status, force, or a token)"); }
+                    if (arguments.length != 1) { badUse("Missing an argument for removenode (either status, force, or an ID)"); }
                     else if (arguments[0].equals("status")) { nodeCmd.printRemovalStatus(System.out); }
                     else if (arguments[0].equals("force"))  { nodeCmd.printRemovalStatus(System.out); probe.forceRemoveCompletion(); }
-                    else                                    { probe.removeToken(arguments[0]); }
+                    else                                    { probe.removeNode(arguments[0]); }
                     break;
 
                 case INVALIDATEKEYCACHE :
@@ -802,9 +913,23 @@ public class NodeCmd
                     nodeCmd.printEndPoints(arguments[0], arguments[1], arguments[2], System.out);
                     break;
 
+                case PROXYHISTOGRAMS :
+                    if (arguments.length != 0) { badUse("proxyhistograms does not take arguments"); }
+                    nodeCmd.printProxyHistograms(System.out);
+                    break;
+
                 case REFRESH:
                     if (arguments.length != 2) { badUse("load_new_sstables requires ks and cf args"); }
                     probe.loadNewSSTables(arguments[0], arguments[1]);
+                    break;
+
+                case REBUILD_INDEX:
+                    if (arguments.length < 2) { badUse("rebuild_index requires ks and cf args"); }
+                    if (arguments.length >= 3)
+                        probe.rebuildIndex(arguments[0], arguments[1], arguments[2].split(","));
+                    else
+                        probe.rebuildIndex(arguments[0], arguments[1]);
+
                     break;
 
                 case GOSSIPINFO : nodeCmd.printGossipInfo(System.out); break;
@@ -817,6 +942,10 @@ public class NodeCmd
                 case DESCRIBERING :
                     if (arguments.length != 1) { badUse("Missing keyspace argument for describering."); }
                     nodeCmd.printDescribeRing(arguments[0], System.out);
+                    break;
+
+                case RANGEKEYSAMPLE :
+                    nodeCmd.printRangeKeySample(System.out);
                     break;
 
                 case PREDICTCONSISTENCY:
@@ -854,8 +983,15 @@ public class NodeCmd
         System.exit(0);
     }
 
+    private static Throwable findInnermostThrowable(Throwable ex)
+    {
+        Throwable inner = ex.getCause();
+        return inner == null ? ex : findInnermostThrowable(inner);
+    }
+
     private void printDescribeRing(String keyspaceName, PrintStream out)
     {
+        out.println("Schema Version:" + probe.getSchemaVersion());
         out.println("TokenRange: ");
         try
         {
@@ -867,6 +1003,16 @@ public class NodeCmd
         catch (InvalidRequestException e)
         {
             err(e, e.getWhy());
+        }
+    }
+
+    private void printRangeKeySample(PrintStream outs)
+    {
+        outs.println("RangeKeySample: ");
+        List<String> tokenStrings = this.probe.getRangeKeySample();
+        for (String tokenString : tokenStrings)
+        {
+            outs.println("\t" + tokenString);
         }
     }
 
@@ -887,7 +1033,7 @@ public class NodeCmd
         e.printStackTrace();
         System.exit(3);
     }
-    
+
     private static void complainNonzeroArgs(String[] args, NodeCommand cmd)
     {
         if (args.length > 0) {
@@ -897,27 +1043,32 @@ public class NodeCmd
         }
     }
 
-    private static void handleSnapshots(NodeCommand nc, String tag, String[] cmdArgs, NodeProbe probe) throws InterruptedException, IOException
+    private static void handleSnapshots(NodeCommand nc, String tag, String[] cmdArgs, String columnFamily, NodeProbe probe) throws InterruptedException, IOException
     {
         String[] keyspaces = Arrays.copyOfRange(cmdArgs, 0, cmdArgs.length);
-        System.out.print("Requested snapshot for: ");        
-        if ( keyspaces.length > 0 ) 
+        System.out.print("Requested snapshot for: ");
+        if ( keyspaces.length > 0 )
         {
-          for (int i = 0; i < keyspaces.length; i++) 
-              System.out.print(keyspaces[i] + " ");            
-        } 
-        else 
+          for (int i = 0; i < keyspaces.length; i++)
+              System.out.print(keyspaces[i] + " ");
+        }
+        else
         {
-            System.out.print("all keyspaces");
+            System.out.print("all keyspaces ");
+        }
+
+        if (columnFamily != null)
+        {
+            System.out.print("and column family: " + columnFamily);
         }
         System.out.println();
-        
+
         switch (nc)
         {
             case SNAPSHOT :
                 if (tag == null || tag.equals(""))
                     tag = new Long(System.currentTimeMillis()).toString();
-                probe.takeSnapshot(tag, keyspaces);
+                probe.takeSnapshot(tag, columnFamily, keyspaces);
                 System.out.println("Snapshot directory: " + tag);
                 break;
             case CLEARSNAPSHOT :
@@ -946,10 +1097,11 @@ public class NodeCmd
             switch (nc)
             {
                 case REPAIR  :
+                    boolean snapshot = cmd.hasOption(SNAPSHOT_REPAIR_OPT.left);
                     if (cmd.hasOption(PRIMARY_RANGE_OPT.left))
-                        probe.forceTableRepairPrimaryRange(keyspace, columnFamilies);
+                        probe.forceTableRepairPrimaryRange(keyspace, snapshot, columnFamilies);
                     else
-                        probe.forceTableRepair(keyspace, columnFamilies);
+                        probe.forceTableRepair(keyspace, snapshot, columnFamilies);
                     break;
                 case FLUSH   :
                     try { probe.forceTableFlush(keyspace, columnFamilies); }

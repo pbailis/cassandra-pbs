@@ -1,6 +1,4 @@
-package org.apache.cassandra.io.sstable;
 /*
- * 
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,25 +6,28 @@ package org.apache.cassandra.io.sstable;
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
- *   http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * 
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+package org.apache.cassandra.io.sstable;
 
-
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.DecoratedKey;
-import org.apache.cassandra.db.RowPosition;
+import org.apache.cassandra.service.StorageService;
+import org.apache.cassandra.utils.ByteBufferUtil;
 
 /**
  * Two approaches to building an IndexSummary:
@@ -35,7 +36,9 @@ import org.apache.cassandra.db.RowPosition;
  */
 public class IndexSummary
 {
-    private ArrayList<KeyPosition> indexPositions;
+    public static final IndexSummarySerializer serializer = new IndexSummarySerializer();
+    private final ArrayList<Long> positions;
+    private final ArrayList<DecoratedKey> keys;
     private long keysWritten = 0;
 
     public IndexSummary(long expectedKeys)
@@ -44,7 +47,14 @@ public class IndexSummary
         if (expectedEntries > Integer.MAX_VALUE)
             // TODO: that's a _lot_ of keys, or a very low interval
             throw new RuntimeException("Cannot use index_interval of " + DatabaseDescriptor.getIndexInterval() + " with " + expectedKeys + " (expected) keys.");
-        indexPositions = new ArrayList<KeyPosition>((int)expectedEntries);
+        positions = new ArrayList<Long>((int)expectedEntries);
+        keys = new ArrayList<DecoratedKey>((int)expectedEntries);
+    }
+
+    private IndexSummary()
+    {
+        positions = new ArrayList<Long>();
+        keys = new ArrayList<DecoratedKey>();
     }
 
     public void incrementRowid()
@@ -57,55 +67,63 @@ public class IndexSummary
         return keysWritten % DatabaseDescriptor.getIndexInterval() == 0;
     }
 
-    public void addEntry(DecoratedKey<?> key, long indexPosition)
+    public void addEntry(DecoratedKey key, long indexPosition)
     {
-        indexPositions.add(new KeyPosition(SSTable.getMinimalKey(key), indexPosition));
+        keys.add(SSTable.getMinimalKey(key));
+        positions.add(indexPosition);
     }
 
-    public void maybeAddEntry(DecoratedKey<?> decoratedKey, long indexPosition)
+    public void maybeAddEntry(DecoratedKey decoratedKey, long indexPosition)
     {
         if (shouldAddEntry())
             addEntry(decoratedKey, indexPosition);
         incrementRowid();
     }
 
-    public List<KeyPosition> getIndexPositions()
+    public List<DecoratedKey> getKeys()
     {
-        return indexPositions;
+        return keys;
+    }
+
+    public long getPosition(int index)
+    {
+        return positions.get(index);
     }
 
     public void complete()
     {
-        indexPositions.trimToSize();
+        keys.trimToSize();
+        positions.trimToSize();
     }
 
-    /**
-     * This is a simple container for the index Key and its corresponding position
-     * in the index file. Binary search is performed on a list of these objects
-     * to find where to start looking for the index entry containing the data position
-     * (which will be turned into a PositionSize object)
-     */
-    public static final class KeyPosition implements Comparable<KeyPosition>
+    public static class IndexSummarySerializer
     {
-        // We allow RowPosition for the purpose of being able to select keys given a token, but the index
-        // should only contain true user provided keys, i.e. DecoratedKey, which is enforced by addEntry.
-        public final RowPosition key;
-        public final long indexPosition;
-
-        public KeyPosition(RowPosition key, long indexPosition)
+        public void serialize(IndexSummary t, DataOutput dos) throws IOException
         {
-            this.key = key;
-            this.indexPosition = indexPosition;
+            assert t.keys.size() == t.positions.size() : "keysize and the position sizes are not same.";
+            dos.writeInt(DatabaseDescriptor.getIndexInterval());
+            dos.writeInt(t.keys.size());
+            for (int i = 0; i < t.keys.size(); i++)
+            {
+                dos.writeLong(t.positions.get(i));
+                ByteBufferUtil.writeWithLength(t.keys.get(i).key, dos);
+            }
         }
 
-        public int compareTo(KeyPosition kp)
+        public IndexSummary deserialize(DataInput dis) throws IOException
         {
-            return key.compareTo(kp.key);
-        }
+            IndexSummary summary = new IndexSummary();
+            if (dis.readInt() != DatabaseDescriptor.getIndexInterval())
+                throw new IOException("Cannot read the saved summary because Index Interval changed.");
 
-        public String toString()
-        {
-            return key + ":" + indexPosition;
+            int size = dis.readInt();
+            for (int i = 0; i < size; i++)
+            {
+                long location = dis.readLong();
+                ByteBuffer key = ByteBufferUtil.readWithLength(dis);
+                summary.addEntry(StorageService.getPartitioner().decorateKey(key), location);
+            }
+            return summary;
         }
     }
 }

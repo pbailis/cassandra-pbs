@@ -27,7 +27,7 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
-import org.apache.cassandra.CleanupHelper;
+import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.Util;
 import org.apache.cassandra.concurrent.Stage;
 import org.apache.cassandra.concurrent.StageManager;
@@ -45,10 +45,9 @@ import org.apache.cassandra.utils.MerkleTree;
 import static org.apache.cassandra.service.AntiEntropyService.*;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 import org.apache.cassandra.utils.ByteBufferUtil;
 
-public abstract class AntiEntropyServiceTestAbstract extends CleanupHelper
+public abstract class AntiEntropyServiceTestAbstract extends SchemaLoader
 {
     // table and column family to test against
     public AntiEntropyService aes;
@@ -130,7 +129,7 @@ public abstract class AntiEntropyServiceTestAbstract extends CleanupHelper
         // and confirm that the tree was split
         assertTrue(validator.tree.size() > 1);
     }
-    
+
     @Test
     public void testValidatorComplete() throws Throwable
     {
@@ -231,7 +230,7 @@ public abstract class AntiEntropyServiceTestAbstract extends CleanupHelper
         AntiEntropyService.TreeResponse r2 = new AntiEntropyService.TreeResponse(REMOTE, rtree);
         AntiEntropyService.RepairSession.Differencer diff = sess.session.new Differencer(cfname, r1, r2);
         diff.run();
-        
+
         // ensure that the changed range was recorded
         assertEquals("Wrong differing ranges", interesting, new HashSet<Range>(diff.differences));
     }
@@ -259,7 +258,7 @@ public abstract class AntiEntropyServiceTestAbstract extends CleanupHelper
                 return true;
             }
         };
-        
+
         // send two tasks through the stage: one to follow existing tasks and a second to follow tasks created by
         // those existing tasks: tasks won't recursively create more tasks
         stage.submit(noop).get(5000, TimeUnit.MILLISECONDS);

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.locator;
 
 import java.io.IOException;
@@ -168,6 +167,7 @@ public class PropertyFileSnitch extends AbstractNetworkTopologySnitch
 
         logger.debug("loaded network topology {}", FBUtilities.toString(reloadedMap));
         endpointMap = reloadedMap;
-        StorageService.instance.getTokenMetadata().invalidateCaches();
+        if (StorageService.instance != null) // null check tolerates circular dependency; see CASSANDRA-4145
+            StorageService.instance.getTokenMetadata().invalidateCaches();
     }
 }

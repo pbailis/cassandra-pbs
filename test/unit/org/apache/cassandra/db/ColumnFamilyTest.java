@@ -27,6 +27,7 @@ import java.util.*;
 import org.apache.cassandra.SchemaLoader;
 import org.junit.Test;
 
+import org.apache.cassandra.io.sstable.ColumnStats;
 import org.apache.cassandra.io.util.DataOutputBuffer;
 import org.apache.cassandra.db.filter.QueryPath;
 import static org.apache.cassandra.Util.column;
@@ -48,10 +49,10 @@ public class ColumnFamilyTest extends SchemaLoader
         cf = ColumnFamily.create("Keyspace1", "Standard1");
         cf.addColumn(column("C", "v", 1));
         DataOutputBuffer bufOut = new DataOutputBuffer();
-        ColumnFamily.serializer().serialize(cf, bufOut);
+        ColumnFamily.serializer.serialize(cf, bufOut);
 
         ByteArrayInputStream bufIn = new ByteArrayInputStream(bufOut.getData(), 0, bufOut.getLength());
-        cf = ColumnFamily.serializer().deserialize(new DataInputStream(bufIn));
+        cf = ColumnFamily.serializer.deserialize(new DataInputStream(bufIn));
         assert cf != null;
         assert cf.metadata().cfName.equals("Standard1");
         assert cf.getSortedColumns().size() == 1;
@@ -75,11 +76,11 @@ public class ColumnFamilyTest extends SchemaLoader
         {
             cf.addColumn(column(cName, map.get(cName), 314));
         }
-        ColumnFamily.serializer().serialize(cf, bufOut);
+        ColumnFamily.serializer.serialize(cf, bufOut);
 
         // verify
         ByteArrayInputStream bufIn = new ByteArrayInputStream(bufOut.getData(), 0, bufOut.getLength());
-        cf = ColumnFamily.serializer().deserialize(new DataInputStream(bufIn));
+        cf = ColumnFamily.serializer.deserialize(new DataInputStream(bufIn));
         for (String cName : map.navigableKeySet())
         {
             ByteBuffer val = cf.getColumn(ByteBufferUtil.bytes(cName)).value();
@@ -177,5 +178,17 @@ public class ColumnFamilyTest extends SchemaLoader
         testSuperColumnResolution(AtomicSortedColumns.factory());
         // array-sorted does allow conflict resolution IF it is the last column.  Bit of an edge case.
         testSuperColumnResolution(ArrayBackedSortedColumns.factory());
+    }
+    
+    @Test
+    public void testColumnStatsRecordsRowDeletesCorrectly() throws IOException
+    {
+        long timestamp = System.currentTimeMillis();
+        int localDeletionTime = (int) (System.currentTimeMillis() / 1000);
+        
+        ColumnFamily cf = ColumnFamily.create("Keyspace1", "Standard1");
+        cf.delete(new DeletionInfo(timestamp, localDeletionTime));
+        ColumnStats stats = cf.getColumnStats();
+        assertEquals(timestamp, stats.maxTimestamp);
     }
 }
