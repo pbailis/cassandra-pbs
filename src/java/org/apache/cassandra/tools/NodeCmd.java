@@ -157,8 +157,6 @@ public class NodeCmd
         addCmdHelp(header, "setcompactionthroughput <value_in_mb>", "Set the MB/s throughput cap for compaction in the system, or 0 to disable throttling.");
         addCmdHelp(header, "setstreamthroughput <value_in_mb>", "Set the MB/s throughput cap for streaming in the system, or 0 to disable throttling.");
         addCmdHelp(header, "describering [keyspace]", "Shows the token ranges info of a given keyspace.");
-        addCmdHelp(header, "predictconsistency [repfactor] [time] [versions]", "Predict latency and consistency [t] ms after writes for given replication factor (optional: multi-version staleness).");
-
 
         // Two args
         addCmdHelp(header, "snapshot [keyspaces...] -t [snapshotName]", "Take a snapshot of the specified keyspaces using optional name snapshotName");
@@ -181,6 +179,7 @@ public class NodeCmd
         addCmdHelp(header, "setcachecapacity <keyspace> <cfname> <keycachecapacity> <rowcachecapacity>", "Set the key and row cache capacities of a given column family");
         addCmdHelp(header, "setcompactionthreshold <keyspace> <cfname> <minthreshold> <maxthreshold>", "Set the min and max compaction thresholds for a given column family");
         addCmdHelp(header, "stop <compaction_type>", "Supported types are COMPACTION, VALIDATION, CLEANUP, SCRUB, INDEX_BUILD");
+        addCmdHelp(header, "predictconsistency [replication_factor] [time] [optional: versions] [optional: latency_percentile]", "Predict latency and consistency [t] ms after writes.");
 
         String usage = String.format("java %s --host <arg> <command>%n", NodeCmd.class.getName());
         hf.printHelp(usage, "", options, "");
@@ -590,7 +589,11 @@ public class NodeCmd
         outs.println(probe.isThriftServerRunning() ? "running" : "not running");
     }
 
-    public void predictConsistency(Integer replicationFactor, Integer timeAfterWrite, Integer numVersions, PrintStream output)
+    public void predictConsistency(Integer replicationFactor,
+                                   Integer timeAfterWrite,
+                                   Integer numVersions,
+                                   Float percentileLatency,
+                                   PrintStream output)
     {
         PBSPredictorMBean predictorMBean = probe.getPBSPredictorMBean();
 
@@ -599,7 +602,12 @@ public class NodeCmd
                 if(w+r > replicationFactor+1)
                     continue;
 
-                PBSPredictionResult result = predictorMBean.doPrediction(replicationFactor, r, w, timeAfterWrite, numVersions);
+                PBSPredictionResult result = predictorMBean.doPrediction(replicationFactor,
+                                                                         r,
+                                                                         w,
+                                                                         timeAfterWrite,
+                                                                         numVersions,
+                                                                         percentileLatency);
 
                 if(result == null)
                 {
@@ -615,10 +623,10 @@ public class NodeCmd
                 output.printf("Probability of consistent reads: %f\n", result.getConsistencyProbability());
                 output.printf("Average read latency: %fms (%fth %%ile %fms)\n", result.getAverageReadLatency(),
                                                                                result.getPercentileReadLatencyPercentile()*100,
-                                                                               result.getPercentileReadLatencyValue());
+                                                                               percentileLatency);
                 output.printf("Average write latency: %fms (%fth %%ile %fms)\n\n", result.getAverageWriteLatency(),
                                                                                   result.getPercentileWriteLatencyPercentile()*100,
-                                                                                  result.getPercentileWriteLatencyValue());
+                                                                                  percentileLatency);
             }
         }
     }
@@ -815,7 +823,14 @@ public class NodeCmd
                     if (arguments.length < 2) { badUse("Requires replication factor and time"); }
                     int numVersions = 1;
                     if (arguments.length == 3) { numVersions = Integer.parseInt(arguments[2]); }
-                    nodeCmd.predictConsistency(Integer.parseInt(arguments[0]), Integer.parseInt(arguments[1]), numVersions, System.out);
+                    float percentileLatency = .999f;
+                    if (arguments.length == 4) { percentileLatency = Float.parseFloat(arguments[4]); }
+
+                    nodeCmd.predictConsistency(Integer.parseInt(arguments[0]),
+                                               Integer.parseInt(arguments[1]),
+                                               numVersions,
+                                               percentileLatency,
+                                               System.out);
                     break;
 
                 default :

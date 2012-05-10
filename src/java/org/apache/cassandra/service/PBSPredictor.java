@@ -170,12 +170,14 @@ public class PBSPredictor implements PBSPredictorMBean
                                             int r,
                                             int w,
                                             float timeSinceWrite,
-                                            int numberVersionsStale)
+                                            int numberVersionsStale,
+                                            float percentileLatency)
     {
-        assert(r <= n);
-        assert(r > 0);
-        assert(w <= n);
-        assert(w > 0);
+        assert r <= n;
+        assert r > 0;
+        assert w <= n;
+        assert w > 0;
+        assert percentileLatency > 0;
 
         if(!doLog)
             return null;
@@ -279,10 +281,8 @@ public class PBSPredictor implements PBSPredictorMBean
             float averageWriteLatency = listAverage(writeLatencies);
             float averageReadLatency = listAverage(readLatencies);
 
-            float latencyPercentile = DatabaseDescriptor.getLatencyPercentileForConsistencyPrediction();
-
-            float percentileWriteLatency = getPercentile(writeLatencies, latencyPercentile);
-            float percentileReadLatency = getPercentile(readLatencies, latencyPercentile);
+            float percentileWriteLatency = getPercentile(writeLatencies, percentileLatency);
+            float percentileReadLatency = getPercentile(readLatencies, percentileLatency);
 
             return new PBSPredictionResult(n,
                                            r,
@@ -293,9 +293,9 @@ public class PBSPredictor implements PBSPredictorMBean
                                            averageReadLatency,
                                            averageWriteLatency,
                                            percentileReadLatency,
-                                           latencyPercentile,
+                                           percentileLatency,
                                            percentileWriteLatency,
-                                           latencyPercentile);
+                                           percentileLatency);
         }
         catch(Exception e)
         {

@@ -24,5 +24,6 @@ public interface PBSPredictorMBean
                                             int r,
                                             int w,
                                             float timeSinceWrite, 
-                                            int numberVersionsStale);
+                                            int numberVersionsStale,
+                                            float percentileLatency);
 }
