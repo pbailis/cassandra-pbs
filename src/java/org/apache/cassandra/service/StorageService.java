@@ -252,6 +252,7 @@ public class StorageService implements IEndpointStateChangeSubscriber, StorageSe
         try
         {
             mbs.registerMBean(this, new ObjectName("org.apache.cassandra.db:type=StorageService"));
+            mbs.registerMBean(new PBSPredictor(), new ObjectName(PBSPredictor.MBEAN_NAME));
         }
         catch (Exception e)
         {
