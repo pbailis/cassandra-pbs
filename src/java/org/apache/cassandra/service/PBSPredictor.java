@@ -137,7 +137,7 @@ public class PBSPredictor implements PBSPredictorMBean
     }
 
     // calculate the percentile entry of a list
-    private float getPercentile(List<Long> list, float percentile)
+    private long getPercentile(List<Long> list, float percentile)
     {
         Collections.sort(list);
         return list.get((int)(list.size()*percentile));
@@ -177,7 +177,7 @@ public class PBSPredictor implements PBSPredictorMBean
         assert r > 0;
         assert w <= n;
         assert w > 0;
-        assert percentileLatency > 0;
+        assert percentileLatency > 0 && percentileLatency < 1;
 
         if(!doLog)
             return null;
@@ -281,8 +281,8 @@ public class PBSPredictor implements PBSPredictorMBean
             float averageWriteLatency = listAverage(writeLatencies);
             float averageReadLatency = listAverage(readLatencies);
 
-            float percentileWriteLatency = getPercentile(writeLatencies, percentileLatency);
-            float percentileReadLatency = getPercentile(readLatencies, percentileLatency);
+            long percentileWriteLatency = getPercentile(writeLatencies, percentileLatency);
+            long percentileReadLatency = getPercentile(readLatencies, percentileLatency);
 
             return new PBSPredictionResult(n,
                                            r,

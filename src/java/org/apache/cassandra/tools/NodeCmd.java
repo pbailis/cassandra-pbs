@@ -611,7 +611,7 @@ public class NodeCmd
 
                 if(result == null)
                 {
-                    output.println("Insufficient data. Is log_latencies_for_consistency_prediction enabled?");
+                    output.println("Insufficient data. Is log_latencies_for_consistency_prediction enabled? Has this node handed any non-local reads and writes?");
                     return;
                 }
 
@@ -621,12 +621,12 @@ public class NodeCmd
 
                 output.printf("N=%d, R=%d, W=%d\n", replicationFactor, r, w);
                 output.printf("Probability of consistent reads: %f\n", result.getConsistencyProbability());
-                output.printf("Average read latency: %fms (%fth %%ile %fms)\n", result.getAverageReadLatency(),
+                output.printf("Average read latency: %fms (%.3fth %%ile %dms)\n", result.getAverageReadLatency(),
                                                                                result.getPercentileReadLatencyPercentile()*100,
-                                                                               percentileLatency);
-                output.printf("Average write latency: %fms (%fth %%ile %fms)\n\n", result.getAverageWriteLatency(),
+                                                                               result.getPercentileReadLatencyValue());
+                output.printf("Average write latency: %fms (%.3fth %%ile %dms)\n\n", result.getAverageWriteLatency(),
                                                                                   result.getPercentileWriteLatencyPercentile()*100,
-                                                                                  percentileLatency);
+                                                                                  result.getPercentileWriteLatencyValue());
             }
         }
     }
@@ -824,7 +824,7 @@ public class NodeCmd
                     int numVersions = 1;
                     if (arguments.length == 3) { numVersions = Integer.parseInt(arguments[2]); }
                     float percentileLatency = .999f;
-                    if (arguments.length == 4) { percentileLatency = Float.parseFloat(arguments[4]); }
+                    if (arguments.length == 4) { percentileLatency = Float.parseFloat(arguments[3]); }
 
                     nodeCmd.predictConsistency(Integer.parseInt(arguments[0]),
                                                Integer.parseInt(arguments[1]),

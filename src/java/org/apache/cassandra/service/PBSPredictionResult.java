@@ -33,9 +33,9 @@ public class PBSPredictionResult implements Serializable
 
     private float averageReadLatency;
     private float averageWriteLatency;
-    private float percentileReadLatencyValue;
+    private long percentileReadLatencyValue;
     private float percentileReadLatencyPercentile;
-    private float percentileWriteLatencyValue;
+    private long percentileWriteLatencyValue;
     private float percentileWriteLatencyPercentile;
 
     public PBSPredictionResult(int n,
@@ -46,9 +46,9 @@ public class PBSPredictionResult implements Serializable
                                float consistencyProbability,
                                float averageReadLatency,
                                float averageWriteLatency,
-                               float percentileReadLatencyValue,
+                               long percentileReadLatencyValue,
                                float percentileReadLatencyPercentile,
-                               float percentileWriteLatencyValue,
+                               long percentileWriteLatencyValue,
                                float percentileWriteLatencyPercentile) {
         this.n = n;
         this.r = r;
@@ -104,7 +104,7 @@ public class PBSPredictionResult implements Serializable
         return averageWriteLatency;
     }
 
-    public float getPercentileReadLatencyValue()
+    public long getPercentileReadLatencyValue()
     {
         return percentileReadLatencyValue;
     }
@@ -114,7 +114,7 @@ public class PBSPredictionResult implements Serializable
         return percentileReadLatencyPercentile;
     }
 
-    public float getPercentileWriteLatencyValue()
+    public long getPercentileWriteLatencyValue()
     {
         return percentileWriteLatencyValue;
     }
