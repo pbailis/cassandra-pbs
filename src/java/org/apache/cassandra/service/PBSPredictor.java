@@ -191,6 +191,11 @@ public class PBSPredictor implements PBSPredictorMBean
             Map<Integer, List<Long>> rLatencies = getOrderedRLatencies();
             Map<Integer, List<Long>> sLatencies = getOrderedSLatencies();
 
+            if (wLatencies.isEmpty() || rLatencies.isEmpty() || 
+                aLatencies.isEmpty() || sLatencies.isEmpty()) {
+              return null;
+            }
+
             // storage for simulated read and write latencies
             ArrayList<Long> readLatencies = new ArrayList<Long>();
             ArrayList<Long> writeLatencies = new ArrayList<Long>();
