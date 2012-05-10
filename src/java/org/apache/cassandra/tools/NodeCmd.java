@@ -592,10 +592,10 @@ public class NodeCmd
 
     public void predictConsistency(Integer replicationFactor, Integer timeAfterWrite, Integer numVersions, PrintStream output)
     {
-        PBSPredictorMBean predictorMBean = probe.getPbsPredictorMBean();
+        PBSPredictorMBean predictorMBean = probe.getPBSPredictorMBean();
 
-        for(int r = 1; r < replicationFactor; ++r) {
-            for(int w = 1; w < replicationFactor; ++w) {
+        for(int r = 1; r <= replicationFactor; ++r) {
+            for(int w = 1; w <= replicationFactor; ++w) {
                 if(w+r > replicationFactor+1)
                     continue;
 
@@ -608,16 +608,16 @@ public class NodeCmd
                 }
 
                 if(r == 1 && w == 1) {
-                    output.printf("At time %dms and maximum version staleness of k=%d\n", timeAfterWrite, numVersions);
+                    output.printf("%dms after a given write, with maximum version staleness of k=%d\n", timeAfterWrite, numVersions);
                 }
 
                 output.printf("N=%d, R=%d, W=%d\n", replicationFactor, r, w);
                 output.printf("Probability of consistent reads: %f\n", result.getConsistencyProbability());
-                output.printf("Average read latency:%fms (%fth /%ile %dms)\n", result.getAverageReadLatency(),
-                                                                               result.getPercentileReadLatencyPercentile(),
+                output.printf("Average read latency: %fms (%fth %%ile %fms)\n", result.getAverageReadLatency(),
+                                                                               result.getPercentileReadLatencyPercentile()*100,
                                                                                result.getPercentileReadLatencyValue());
-                output.printf("Average write latency:%fms (%fth /%ile %dms)\n\n", result.getAverageWriteLatency(),
-                                                                                  result.getPercentileWriteLatencyPercentile(),
+                output.printf("Average write latency: %fms (%fth %%ile %fms)\n\n", result.getAverageWriteLatency(),
+                                                                                  result.getPercentileWriteLatencyPercentile()*100,
                                                                                   result.getPercentileWriteLatencyValue());
             }
         }

@@ -494,9 +494,14 @@ encryption_options:
     # store_type: JKS
     # cipher_suites: [TLS_RSA_WITH_AES_128_CBC_SHA,TLS_RSA_WITH_AES_256_CBC_SHA]
 
-#todo: comment!
-
+#Consistency prediction (nodetool predictconsistency) requires logging of latency data
 log_latencies_for_consistency_prediction: false
-max_logged_latencies_for_consistency_prediction: 100000
+
+# The size requirement is max_log_latencies*8*4 bytes
+#   More logging means more accuracy
+#   However, more logging means changes in latency (e.g., route flapping) will not be reflected as quickly
+max_logged_latencies_for_consistency_prediction: 10000
+
+# Prediction is fast, and 10K trials complete quickly
+#  More runs lead to increased accuracy
 number_trials_for_consistency_prediction: 10000
-latency_percentile_for_consistency_prediction: .999

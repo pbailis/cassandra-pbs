@@ -211,7 +211,7 @@ public class PBSPredictor implements PBSPredictorMBean
                 //simulate sending a write to N replicas then sending a
                 //read to N replicas and record the latencies by randomly
                 //sampling from gathered latencies
-                for(int replicaNo = 0; i < n; ++i)
+                for(int replicaNo = 0; replicaNo < n; ++replicaNo)
                 {
                     long trialWLatency = getRandomLatencySample(wLatencies, replicaNo);
                     long trialALatency = getRandomLatencySample(aLatencies, replicaNo);
@@ -230,7 +230,7 @@ public class PBSPredictor implements PBSPredictorMBean
                 // the write latency for this trial is the time it takes
                 // for the wth replica to respond (W+A)
                 Collections.sort(replicaWriteLatencies);
-                long writeLatency = replicaWriteLatencies.get(w);
+                long writeLatency = replicaWriteLatencies.get(w-1);
                 writeLatencies.add(writeLatency);
 
                 ArrayList<Long> sortedReplicaReadLatencies = new ArrayList<Long>(replicaReadLatencies);
@@ -238,7 +238,7 @@ public class PBSPredictor implements PBSPredictorMBean
 
                 // the read latency for this trial is the time it takes
                 // for the rth replica to respond (R+S)
-                readLatencies.add(sortedReplicaReadLatencies.get(r));
+                readLatencies.add(sortedReplicaReadLatencies.get(r-1));
 
                 // were all of the read responses reordered?
 
@@ -265,6 +265,9 @@ public class PBSPredictor implements PBSPredictorMBean
                 trialALatencies.clear();
                 trialRLatencies.clear();
                 trialSLatencies.clear();
+
+                replicaReadLatencies.clear();
+                replicaWriteLatencies.clear();
             }
 
             float oneVersionConsistencyProbability = (float)consistentReads/numTrials;
@@ -349,7 +352,7 @@ public class PBSPredictor implements PBSPredictorMBean
             return;
         }
 
-        wLatencies.add(response.getCreationTime() - startTime);
+        wLatencies.add(Math.max(0, response.getCreationTime() - startTime));
 
         Collection<Long> aLatencies = messageIdToALatencies.get(id);
         if(aLatencies == null)
@@ -357,7 +360,7 @@ public class PBSPredictor implements PBSPredictorMBean
             return;
         }
 
-        aLatencies.add(time - response.getCreationTime());
+        aLatencies.add(Math.max(0, time - response.getCreationTime()));
     }
 
     public static void logReadResponse(String id, Message response)
@@ -379,14 +382,14 @@ public class PBSPredictor implements PBSPredictorMBean
             return;
         }
 
-        rLatencies.add(response.getCreationTime()-startTime);
+        rLatencies.add(Math.max(0, response.getCreationTime()-startTime));
 
         Collection<Long> sLatencies = messageIdToSLatencies.get(id);
         if(sLatencies == null)
         {
             return;
         }
-        sLatencies.add(time-response.getCreationTime());
+        sLatencies.add(Math.max(0, time-response.getCreationTime()));
     }
 
     Map<Integer, List<Long>> getOrderedWLatencies()
@@ -410,7 +413,7 @@ public class PBSPredictor implements PBSPredictorMBean
     }
 
     // Return the collected latencies indexed by response number instead of by messageID
-    static Map<Integer, List<Long>> getOrderedLatencies(Collection<Collection<Long>> latencyLists)
+    private static Map<Integer, List<Long>> getOrderedLatencies(Collection<Collection<Long>> latencyLists)
     {
         Map<Integer, List<Long>> ret = new HashMap<Integer, List<Long>>();
 

@@ -18,7 +18,9 @@
 
 package org.apache.cassandra.service;
 
-public class PBSPredictionResult
+import java.io.Serializable;
+
+public class PBSPredictionResult implements Serializable
 {
     private int n;
     private int r;
