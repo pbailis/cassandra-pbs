@@ -93,21 +93,6 @@ public class PBSPredictor implements PBSPredictorMBean
 
     public static boolean doLog = DatabaseDescriptor.logLatenciesForConsistencyPrediction();
 
-    public static final PBSPredictor instance = new PBSPredictor();
-
-    public PBSPredictor()
-    {
-        MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
-        try
-        {
-            mbs.registerMBean(this, new ObjectName(PBSPredictor.MBEAN_NAME));
-        }
-        catch (Exception e)
-        {
-            throw new RuntimeException(e);
-        }
-    }
-
     /*
         We record a fixed size set of WARS latencies for read and
         mutation operations.  We store the order in which each

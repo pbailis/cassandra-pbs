@@ -207,6 +207,7 @@ public final class MessagingService implements MessagingServiceMBean
         try
         {
             mbs.registerMBean(this, new ObjectName(MBEAN_NAME));
+            mbs.registerMBean(new PBSPredictor(), new ObjectName(PBSPredictor.MBEAN_NAME));
         }
         catch (Exception e)
         {
