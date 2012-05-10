@@ -93,12 +93,14 @@ public class PBSPredictor implements PBSPredictorMBean
 
     public static boolean doLog = DatabaseDescriptor.logLatenciesForConsistencyPrediction();
 
-    static
+    public static final PBSPredictor instance = new PBSPredictor();
+
+    public PBSPredictor()
     {
         MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
         try
         {
-            //mbs.registerMBean(new PBSPredictor(), new ObjectName(PBSPredictor.MBEAN_NAME));
+            mbs.registerMBean(this, new ObjectName(PBSPredictor.MBEAN_NAME));
         }
         catch (Exception e)
         {
