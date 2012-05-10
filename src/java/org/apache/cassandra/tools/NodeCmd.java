@@ -31,8 +31,10 @@ import java.util.*;
 import java.util.Map.Entry;
 import java.util.concurrent.ExecutionException;
 
+import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.service.CacheServiceMBean;
-import org.apache.cassandra.service.PBSTrackerMBean;
+import org.apache.cassandra.service.PBSPredictionResult;
+import org.apache.cassandra.service.PBSPredictorMBean;
 import org.apache.commons.cli.*;
 
 import org.apache.cassandra.concurrent.JMXEnabledThreadPoolExecutorMBean;
@@ -117,8 +119,7 @@ public class NodeCmd
         UPGRADESSTABLES,
         VERSION,
         DESCRIBERING,
-        PBSWARS,
-        PBSWARSUNORDERED
+        PREDICTCONSISTENCY,
     }
 
     
@@ -148,8 +149,6 @@ public class NodeCmd
         addCmdHelp(header, "gossipinfo", "Shows the gossip information for the cluster");
         addCmdHelp(header, "invalidatekeycache", "Invalidate the key cache");
         addCmdHelp(header, "invalidaterowcache", "Invalidate the row cache");
-        addCmdHelp(header, "pbswars", "Print out (ordered) WARS latency statistics.");
-        addCmdHelp(header, "pbswarsunordered", "Print out (unordered) WARS latency statistics.");
 
         // One arg
         addCmdHelp(header, "netstats [host]", "Print network information on provided host (connecting node by default)");
@@ -158,6 +157,8 @@ public class NodeCmd
         addCmdHelp(header, "setcompactionthroughput <value_in_mb>", "Set the MB/s throughput cap for compaction in the system, or 0 to disable throttling.");
         addCmdHelp(header, "setstreamthroughput <value_in_mb>", "Set the MB/s throughput cap for streaming in the system, or 0 to disable throttling.");
         addCmdHelp(header, "describering [keyspace]", "Shows the token ranges info of a given keyspace.");
+        addCmdHelp(header, "predictconsistency [repfactor] [time] [versions]", "Predict latency and consistency [t] ms after writes for given replication factor (optional: multi-version staleness).");
+
 
         // Two args
         addCmdHelp(header, "snapshot [keyspaces...] -t [snapshotName]", "Take a snapshot of the specified keyspaces using optional name snapshotName");
@@ -589,50 +590,37 @@ public class NodeCmd
         outs.println(probe.isThriftServerRunning() ? "running" : "not running");
     }
 
-    private void printSpecificLatencyOrdered(String which, Map<Integer, List<Long>> latencies)
+    public void predictConsistency(Integer replicationFactor, Integer timeAfterWrite, Integer numVersions, PrintStream output)
     {
-        List<Integer> replicaNumbers = new ArrayList<Integer>(latencies.keySet());
-        Collections.sort(replicaNumbers);
+        PBSPredictorMBean predictorMBean = probe.getPbsPredictorMBean();
 
-        System.out.println(which);
-        for(int replicaNo : replicaNumbers)
-        {
-            System.out.println("replica number "+replicaNo);
-            for(long latency : latencies.get(replicaNo))
-            {
-                System.out.println(latency);
+        for(int r = 1; r < replicationFactor; ++r) {
+            for(int w = 1; w < replicationFactor; ++w) {
+                if(w+r > replicationFactor+1)
+                    continue;
+
+                PBSPredictionResult result = predictorMBean.doPrediction(replicationFactor, r, w, timeAfterWrite, numVersions);
+
+                if(result == null)
+                {
+                    output.println("Insufficient data. Is log_latencies_for_consistency_prediction enabled?");
+                    return;
+                }
+
+                if(r == 1 && w == 1) {
+                    output.printf("At time %dms and maximum version staleness of k=%d\n", timeAfterWrite, numVersions);
+                }
+
+                output.printf("N=%d, R=%d, W=%d\n", replicationFactor, r, w);
+                output.printf("Probability of consistent reads: %f\n", result.getConsistencyProbability());
+                output.printf("Average read latency:%fms (%fth /%ile %dms)\n", result.getAverageReadLatency(),
+                                                                               result.getPercentileReadLatencyPercentile(),
+                                                                               result.getPercentileReadLatencyValue());
+                output.printf("Average write latency:%fms (%fth /%ile %dms)\n\n", result.getAverageWriteLatency(),
+                                                                                  result.getPercentileWriteLatencyPercentile(),
+                                                                                  result.getPercentileWriteLatencyValue());
             }
         }
-    }
-
-    public void printWARSOrdered()
-    {
-        PBSTrackerMBean pbsTracker = probe.getPBSTrackerMBean();
-
-        printSpecificLatencyOrdered("w latencies", pbsTracker.getOrderedWLatencies());
-        printSpecificLatencyOrdered("a latencies", pbsTracker.getOrderedALatencies());
-        printSpecificLatencyOrdered("r latencies", pbsTracker.getOrderedRLatencies());
-        printSpecificLatencyOrdered("s latencies", pbsTracker.getOrderedSLatencies());
-    }
-
-    private void printSpecificLatencyUnordered(String which, List<Long> latencies)
-    {
-        System.out.println(which);
-
-        for(long latency : latencies)
-        {
-            System.out.println(latency);
-        }
-    }
-
-    public void printWARSUnordered()
-    {
-        PBSTrackerMBean pbsTracker = probe.getPBSTrackerMBean();
-
-        printSpecificLatencyUnordered("w latencies", pbsTracker.getUnorderedWLatencies());
-        printSpecificLatencyUnordered("a latencies", pbsTracker.getUnorderedALatencies());
-        printSpecificLatencyUnordered("r latencies", pbsTracker.getUnorderedRLatencies());
-        printSpecificLatencyUnordered("s latencies", pbsTracker.getUnorderedSLatencies());
     }
 
     public static void main(String[] args) throws IOException, InterruptedException, ConfigurationException, ParseException
@@ -823,12 +811,11 @@ public class NodeCmd
                     nodeCmd.printDescribeRing(arguments[0], System.out);
                     break;
 
-                case PBSWARS:
-                    nodeCmd.printWARSOrdered();
-                    break;
-
-                case PBSWARSUNORDERED:
-                    nodeCmd.printWARSUnordered();
+                case PREDICTCONSISTENCY:
+                    if (arguments.length < 2) { badUse("Requires replication factor and time"); }
+                    int numVersions = 1;
+                    if (arguments.length == 3) { numVersions = Integer.parseInt(arguments[2]); }
+                    nodeCmd.predictConsistency(Integer.parseInt(arguments[0]), Integer.parseInt(arguments[1]), numVersions, System.out);
                     break;
 
                 default :

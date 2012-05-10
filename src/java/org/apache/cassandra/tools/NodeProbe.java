@@ -51,11 +51,7 @@ import org.apache.cassandra.gms.FailureDetectorMBean;
 import org.apache.cassandra.locator.EndpointSnitchInfoMBean;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.net.MessagingServiceMBean;
-import org.apache.cassandra.service.CacheService;
-import org.apache.cassandra.service.CacheServiceMBean;
-import org.apache.cassandra.service.PBSTracker;
-import org.apache.cassandra.service.PBSTrackerMBean;
-import org.apache.cassandra.service.StorageServiceMBean;
+import org.apache.cassandra.service.*;
 import org.apache.cassandra.streaming.StreamingService;
 import org.apache.cassandra.streaming.StreamingServiceMBean;
 import org.apache.cassandra.thrift.InvalidRequestException;
@@ -84,7 +80,7 @@ public class NodeProbe
     public MessagingServiceMBean msProxy;
     private FailureDetectorMBean fdProxy;
     private CacheServiceMBean cacheService;
-    private PBSTrackerMBean pbsTracker;
+    private PBSPredictorMBean pbsPredictor;
 
     /**
      * Creates a NodeProbe using the specified JMX host, port, username, and password.
@@ -153,8 +149,8 @@ public class NodeProbe
         {
             ObjectName name = new ObjectName(ssObjName);
             ssProxy = JMX.newMBeanProxy(mbeanServerConn, name, StorageServiceMBean.class);
-            name = new ObjectName(PBSTracker.MBEAN_NAME);
-            pbsTracker = JMX.newMBeanProxy(mbeanServerConn, name, PBSTrackerMBean.class);
+            name = new ObjectName(PBSPredictor.MBEAN_NAME);
+            pbsPredictor = JMX.newMBeanProxy(mbeanServerConn, name, PBSPredictorMBean.class);
             name = new ObjectName(MessagingService.MBEAN_NAME);
             msProxy = JMX.newMBeanProxy(mbeanServerConn, name, MessagingServiceMBean.class);
             name = new ObjectName(StreamingService.MBEAN_OBJECT_NAME);
@@ -644,9 +640,9 @@ public class NodeProbe
         return ssProxy.describeRingJMX(keyspaceName);
     }
 
-    public PBSTrackerMBean getPBSTrackerMBean()
+    public PBSPredictorMBean getPbsPredictorMBean()
     {
-        return pbsTracker;
+        return pbsPredictor;
     }
 }
 

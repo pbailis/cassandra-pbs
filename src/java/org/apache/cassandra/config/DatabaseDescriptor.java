@@ -1062,4 +1062,27 @@ public class DatabaseDescriptor
     {
         return rowCacheProvider;
     }
+
+    public static boolean logLatenciesForConsistencyPrediction()
+    {
+        return conf.log_latencies_for_consistency_prediction;
+    }
+
+    public static long getMaxLoggedLatenciesForConsistencyPrediction()
+    {
+        assert conf.max_logged_latencies_for_consistency_prediction > 0;
+        return conf.max_logged_latencies_for_consistency_prediction;
+    }
+
+    public static long getNumberTrialsForConsistencyPrediction()
+    {
+        assert conf.number_trials_for_consistency_prediction > 0;
+        return conf.number_trials_for_consistency_prediction;
+    }
+
+    public static float getLatencyPercentileForConsistencyPrediction()
+    {
+        assert conf.latency_percentile_for_consistency_prediction > 0;
+        return conf.latency_percentile_for_consistency_prediction;
+    }
 }

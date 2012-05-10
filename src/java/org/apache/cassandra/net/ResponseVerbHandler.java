@@ -18,11 +18,12 @@
 
 package org.apache.cassandra.net;
 
+import org.apache.cassandra.service.PBSPredictor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.service.IWriteResponseHandler;
-import org.apache.cassandra.service.PBSTracker;
+import org.apache.cassandra.service.PBSPredictor;
 import org.apache.cassandra.service.ReadCallback;
 
 public class ResponseVerbHandler implements IVerbHandler
@@ -49,11 +50,11 @@ public class ResponseVerbHandler implements IVerbHandler
 
             if(cb instanceof IWriteResponseHandler)
             {
-                PBSTracker.logWriteResponse(id, message);
+                PBSPredictor.logWriteResponse(id, message);
             }
             else if(cb instanceof ReadCallback)
             {
-                PBSTracker.logReadResponse(id, message);
+                PBSPredictor.logReadResponse(id, message);
             }
 
             ((IAsyncCallback) cb).response(message);

@@ -18,20 +18,11 @@
 
 package org.apache.cassandra.service;
 
-import java.util.List;
-import java.util.Map;
-
-public interface PBSTrackerMBean
+public interface PBSPredictorMBean
 {
-    public List<Long> getUnorderedWLatencies();
-    public Map<Integer, List<Long>> getOrderedWLatencies();
-
-    public List<Long> getUnorderedALatencies();
-    public Map<Integer, List<Long>> getOrderedALatencies();
-
-    public List<Long> getUnorderedRLatencies();
-    public Map<Integer, List<Long>> getOrderedRLatencies();
-
-    public List<Long> getUnorderedSLatencies();
-    public Map<Integer, List<Long>> getOrderedSLatencies();
+    public PBSPredictionResult doPrediction(int n,
+                                            int r,
+                                            int w,
+                                            float timeSinceWrite, 
+                                            int numberVersionsStale);
 }

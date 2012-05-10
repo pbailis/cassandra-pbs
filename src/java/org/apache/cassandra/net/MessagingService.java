@@ -39,6 +39,7 @@ import javax.management.ObjectName;
 import com.google.common.base.Function;
 import com.google.common.collect.Lists;
 import org.apache.cassandra.concurrent.NamedThreadFactory;
+import org.apache.cassandra.service.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -55,11 +56,6 @@ import org.apache.cassandra.locator.ILatencySubscriber;
 import org.apache.cassandra.net.io.SerializerType;
 import org.apache.cassandra.net.sink.SinkManager;
 import org.apache.cassandra.security.SSLFactory;
-import org.apache.cassandra.service.IWriteResponseHandler;
-import org.apache.cassandra.service.PBSTracker;
-import org.apache.cassandra.service.ReadCallback;
-import org.apache.cassandra.service.StorageProxy;
-import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.streaming.FileStreamTask;
 import org.apache.cassandra.streaming.StreamHeader;
 import org.apache.cassandra.utils.*;
@@ -396,7 +392,7 @@ public final class MessagingService implements MessagingServiceMBean
 
         if(cb instanceof IWriteResponseHandler || cb instanceof ReadCallback)
         {
-            PBSTracker.startOperation(id);
+            PBSPredictor.startOperation(id);
         }
 
         sendOneWay(message, id, to);

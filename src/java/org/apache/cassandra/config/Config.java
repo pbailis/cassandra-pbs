@@ -134,6 +134,11 @@ public class Config
     public int row_cache_keys_to_save = Integer.MAX_VALUE;
     public String row_cache_provider = ConcurrentLinkedHashCacheProvider.class.getSimpleName();
 
+    public boolean log_latencies_for_consistency_prediction = false;
+    public long max_logged_latencies_for_consistency_prediction = 100000;
+    public long number_trials_for_consistency_prediction = 10000;
+    public float latency_percentile_for_consistency_prediction = .999f;
+
     public static enum CommitLogSync {
         periodic,
         batch
