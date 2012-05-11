@@ -88,6 +88,11 @@ public class MessageOut<T>
         return MessagingService.verbStages.get(verb);
     }
 
+    public long getCreationTime()
+    {
+        return creationTime;
+    }
+
     public String toString()
     {
         StringBuilder sbuf = new StringBuilder("");
