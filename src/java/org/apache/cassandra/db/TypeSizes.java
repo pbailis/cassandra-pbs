@@ -24,6 +24,7 @@ public abstract class TypeSizes
     public static final TypeSizes NATIVE = new NativeDBTypeSizes();
     public static final TypeSizes VINT = new VIntEncodedTypeSizes();
 
+    private static final int BYTE_SIZE = 1;
     private static final int BOOL_SIZE = 1;
     private static final int SHORT_SIZE = 2;
     private static final int INT_SIZE = 4;
@@ -33,6 +34,7 @@ public abstract class TypeSizes
     public abstract int sizeof(short value);
     public abstract int sizeof(int value);
     public abstract int sizeof(long value);
+    public abstract int sizeof(byte value);
 
     /** assumes UTF8 */
     public int sizeof(String value)
@@ -80,6 +82,11 @@ public abstract class TypeSizes
         {
             return LONG_SIZE;
         }
+
+        public int sizeof(byte value)
+        {
+            return BYTE_SIZE;
+        }
     }
 
     public static class VIntEncodedTypeSizes extends TypeSizes
@@ -126,6 +133,11 @@ public abstract class TypeSizes
         }
 
         public int sizeof(int i)
+        {
+            return sizeofVInt(i);
+        }
+
+        public int sizeof(byte i)
         {
             return sizeofVInt(i);
         }

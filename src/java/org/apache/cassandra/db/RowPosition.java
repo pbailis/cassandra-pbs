@@ -107,7 +107,7 @@ public abstract class RowPosition implements RingPosition<RowPosition>
             }
             else
             {
-                Token.serializer.serializedSize(pos.getToken(), typeSizes);
+                size += Token.serializer.serializedSize(pos.getToken(), typeSizes);
             }
             return size;
         }

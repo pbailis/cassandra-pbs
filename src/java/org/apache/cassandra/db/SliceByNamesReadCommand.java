@@ -116,7 +116,7 @@ class SliceByNamesReadCommandSerializer implements IVersionedSerializer<ReadComm
         int keySize = command.key.remaining();
 
         size += sizes.sizeof(command.table);
-        size += sizes.sizeof(keySize) + keySize;
+        size += sizes.sizeof((short)keySize) + keySize;
         size += command.queryPath.serializedSize(sizes);
         size += sizes.sizeof(command.columnNames.size());
         if (!command.columnNames.isEmpty())
