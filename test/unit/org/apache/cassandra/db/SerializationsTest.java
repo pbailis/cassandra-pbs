@@ -335,6 +335,22 @@ public class SerializationsTest extends AbstractSerializationsTester
         in.close();
     }
 
+    @Test
+    public void testTimestampSerialization() throws IOException
+    {
+        SliceFromReadCommand standardCmd = new SliceFromReadCommand(Statics.KS, Statics.Key, Statics.StandardPath, Statics.Start, Statics.Stop, true, 100);
+        DataOutputStream out = getOutput("db.SliceFromReadCommand.bin");
+        MessageOut<ReadCommand> standardMsg = standardCmd.createMessage();
+        standardMsg.serialize(out, getVersion());
+        out.close();
+
+        DataInputStream in = getInput("db.SliceFromReadCommand.bin");
+        MessageIn<ReadCommand> deserializedStandardMsg = MessageIn.read(
+            in, getVersion(), "id");
+        assert deserializedStandardMsg != null;
+        assert standardMsg.getCreationTime() == deserializedStandardMsg.getCreationTime();
+    }
+
     private static ByteBuffer bb(String s) {
         return ByteBufferUtil.bytes(s);
     }
