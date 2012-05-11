@@ -368,6 +368,8 @@ public class StorageService implements IEndpointStateChangeSubscriber, StorageSe
             // "Touch" metrics classes to trigger static initialization, such that all metrics become available
             // on start-up even if they have not yet been used.
             new ClientRequestMetrics();
+            // "Touch" PBS Predictor to make sure it is constructed
+            PBSPredictor.instance().init();
         }
 
         if (Boolean.parseBoolean(System.getProperty("cassandra.load_ring_state", "true")))

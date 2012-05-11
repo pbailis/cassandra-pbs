@@ -17,7 +17,6 @@
  */
 package org.apache.cassandra.net;
 
-import org.apache.cassandra.service.PBSPredictor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -46,11 +45,11 @@ public class ResponseVerbHandler implements IVerbHandler
         {
             if(cb instanceof IWriteResponseHandler)
             {
-                PBSPredictor.logWriteResponse(id, message);
+                PBSPredictor.instance().logWriteResponse(id, message);
             }
             else if(cb instanceof ReadCallback)
             {
-                PBSPredictor.logReadResponse(id, message);
+                PBSPredictor.instance().logReadResponse(id, message);
             }
 
             if (logger.isDebugEnabled())

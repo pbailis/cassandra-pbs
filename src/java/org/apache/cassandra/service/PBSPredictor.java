@@ -30,6 +30,9 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /*
   ===OVERVIEW===
 
@@ -91,9 +94,9 @@ import javax.management.ObjectName;
 
 public class PBSPredictor implements PBSPredictorMBean
 {
-    public static final String MBEAN_NAME = "org.apache.cassandra.service:type=PBSPredictor";
+    private static final Logger logger = LoggerFactory.getLogger(PBSPredictor.class);
 
-    public static boolean doLog = DatabaseDescriptor.logLatenciesForConsistencyPrediction();
+    public static final String MBEAN_NAME = "org.apache.cassandra.service:type=PBSPredictor";
 
     /*
         We record a fixed size set of WARS latencies for read and
@@ -105,21 +108,55 @@ public class PBSPredictor implements PBSPredictorMBean
         latencies.
      */
 
-    private static final Map<String, Long> messageIdToStartTimes = new ConcurrentHashMap<String, Long>();
+    private final Map<String, Long> messageIdToStartTimes = new ConcurrentHashMap<String, Long>();
 
     // used for LRU replacement
-    private static final Queue<String> messageIds = new ConcurrentLinkedQueue<String>();
+    private final Queue<String> messageIds = new ConcurrentLinkedQueue<String>();
 
-    private static final Map<String, Collection<Long>> messageIdToWLatencies =
+    private final Map<String, Collection<Long>> messageIdToWLatencies =
             new ConcurrentHashMap<String, Collection<Long>>();
-    private static final Map<String, Collection<Long>> messageIdToALatencies =
+    private final Map<String, Collection<Long>> messageIdToALatencies =
             new ConcurrentHashMap<String, Collection<Long>>();
-    private static final Map<String, Collection<Long>> messageIdToRLatencies =
+    private final Map<String, Collection<Long>> messageIdToRLatencies =
             new ConcurrentHashMap<String, Collection<Long>>();
-    private static final Map<String, Collection<Long>> messageIdToSLatencies =
+    private final Map<String, Collection<Long>> messageIdToSLatencies =
             new ConcurrentHashMap<String, Collection<Long>>();
 
-    private Random random = new Random();
+    private Random random;
+    private boolean doLog = false;
+    private boolean initialized = false;
+
+    private static final PBSPredictor instance = new PBSPredictor();
+
+    public static PBSPredictor instance()
+    {
+        return instance;
+    }
+
+    private PBSPredictor()
+    {
+        init();
+    }
+
+    public void init()
+    {
+        if (!initialized) {
+          doLog = DatabaseDescriptor.logLatenciesForConsistencyPrediction();
+          random = new Random();
+
+          MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
+          try
+          {
+              mbs.registerMBean(this, new ObjectName(PBSPredictor.MBEAN_NAME));
+          }
+          catch (Exception e)
+          {
+              throw new RuntimeException(e);
+          }
+          initialized = true;
+        }
+    }
+  	
 
     // used for random sampling from the latencies
     private long getRandomElement(List<Long> list)
@@ -311,7 +348,7 @@ public class PBSPredictor implements PBSPredictorMBean
         }
     }
 
-    public static void startOperation(String id)
+    public void startOperation(String id)
     {
         if(!doLog)
             return;
@@ -340,7 +377,7 @@ public class PBSPredictor implements PBSPredictorMBean
         messageIdToSLatencies.put(id, new ConcurrentLinkedQueue<Long>());
     }
 
-    public static void logWriteResponse(String id, MessageIn response)
+    public void logWriteResponse(String id, MessageIn response)
     {
         if(!doLog)
             return;
@@ -370,7 +407,7 @@ public class PBSPredictor implements PBSPredictorMBean
         aLatencies.add(Math.max(0, time - response.creationTime));
     }
 
-    public static void logReadResponse(String id, MessageIn response)
+    public void logReadResponse(String id, MessageIn response)
     {
         if(!doLog)
             return;
@@ -420,7 +457,7 @@ public class PBSPredictor implements PBSPredictorMBean
     }
 
     // Return the collected latencies indexed by response number instead of by messageID
-    private static Map<Integer, List<Long>> getOrderedLatencies(Collection<Collection<Long>> latencyLists)
+    private Map<Integer, List<Long>> getOrderedLatencies(Collection<Collection<Long>> latencyLists)
     {
         Map<Integer, List<Long>> ret = new HashMap<Integer, List<Long>>();
 
