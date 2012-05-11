@@ -360,7 +360,6 @@ public final class MessagingService implements MessagingServiceMBean
         try
         {
             mbs.registerMBean(this, new ObjectName(MBEAN_NAME));
-            mbs.registerMBean(new PBSPredictor(), new ObjectName(PBSPredictor.MBEAN_NAME));
         }
         catch (Exception e)
         {
@@ -547,7 +546,7 @@ public final class MessagingService implements MessagingServiceMBean
 
         if(cb instanceof IWriteResponseHandler || cb instanceof ReadCallback)
         {
-            PBSPredictor.startOperation(id);
+            PBSPredictor.instance().startOperation(id);
         }
 
         sendOneWay(message, id, to);
