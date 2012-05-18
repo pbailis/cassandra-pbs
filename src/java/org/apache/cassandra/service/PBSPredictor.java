@@ -33,63 +33,94 @@ import javax.management.ObjectName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/*
-  ===OVERVIEW===
-
-  This class performs latency and consistency predictions as described
-  in "Probabilistically Bounded Staleness for Practical Partial
-  Quorums" by Bailis et al. in VLDB 2012. The predictions are of the
-  form:
-
-  "With ReplicationFactor N, read consistency level of R, and write
-  consistency level W, after t seconds, p% of reads will return a
-  version within k versions of the last written; this should result in
-  a latency of L ms."
-
-  These predictions should be used as a rough guideline for system
-  operators. This interface is exposed through nodetool.
-
-  ===LATENCY GATHERING===
-
-  The class accomplishes this by measuring latencies for reads and
-  writes, then using Monte Carlo simulation to predict behavior under
-  a given N,R, and W based on those latencies.
-
-  We capture four distributions:
-
-  --W: time from when the coordinator sends a mutation to the time
-    that a replica begins to serve the new value(s)
-
-  --A: time from when a replica accepting a mutation sends an
-    acknowledgment to the time the coordinator hears of it
-
-  --R: time from when the coordinator sends a read request to the time
-    that the replica performs the read
-
-  --S: time from when the replica sends a read response to the time
-    when the coordinator receives it
-
-  A and S are mostly network-bound, while W and R depend on both the
-  network and local processing time.
-
-  ===CAVEATS===
-
-  Prediction is only as good as the latencies collected. Accurate
-  prediction requires synchronizing clocks between replicas.  We
-  collect a running sample of latencies, but, if latencies change
-  dramatically, predictions will be off.
-
-  The predictions are conservative, or worst-case, meaning we may
-  predict more staleness than in practice in the following ways:
-    --We do not account for read repair. 
-    --We do not account for Merkle tree exchange.
-    --Multi-version staleness is particularly conservative.
-    --We simulate non-local reads and writes. We assume that the
-      coordinating Cassandra node is not itself a replica for a given key.
-
-  The predictions are optimistic in the following ways:
-    --We do not predict the impact of node failure.
-    --We do not model hinted handoff.
+/**
+ * Performs latency and consistency predictions as described in
+ * <a href="http://arxiv.org/pdf/1204.6082.pdf">
+ * "Probabilistically Bounded Staleness for Practical Partial Quorums"</a>
+ * by Bailis et al. in VLDB 2012. The predictions are of the form:
+ *
+ * <i>With ReplicationFactor <tt>N</tt>, read consistency level of
+ * <tt>R</tt>, and write consistency level <tt>W</tt>, after
+ * <tt>t</tt> seconds, <tt>p</tt>% of reads will return a version
+ * within <tt>k</tt> versions of the last written; this should result
+ * in a latency of <tt>L</tt> ms.</i>
+ *
+ * <p>
+ * These predictions should be used as a rough guideline for system
+ * operators. This interface is exposed through nodetool.
+ *
+ * <p>
+ * The class accomplishes this by measuring latencies for reads and
+ * writes, then using Monte Carlo simulation to predict behavior under
+ * a given N,R, and W based on those latencies.
+ *
+ * <p>
+ * We capture four distributions:
+ *
+ * <ul>
+ * <li>
+ * <tt>W</tt>: time from when the coordinator sends a mutation to the time
+ * that a replica begins to serve the new value(s)
+ * </li>
+ *
+ * <li>
+ * <tt>A</tt>: time from when a replica accepting a mutation sends an
+ *   acknowledgment to the time the coordinator hears of it
+ * </li>
+ *
+ * <li>
+ * <tt>R</tt>: time from when the coordinator sends a read request to the time
+ *   that the replica performs the read
+ * </li>
+ *
+ * <li>
+ * <tt>S</tt>: time from when the replica sends a read response to the time
+ *   when the coordinator receives it
+ * </li>
+ * </ul>
+ *
+ * <tt>A</tt> and <tt>S</tt> are mostly network-bound, while W and R
+ * depend on both the network and local processing time.
+ *
+ * <p>
+ * <b>Caveats:</b>
+ * Prediction is only as good as the latencies collected. Accurate
+ * prediction requires synchronizing clocks between replicas.  We
+ * collect a running sample of latencies, but, if latencies change
+ * dramatically, predictions will be off.
+ *
+ * <p>
+ * The predictions are conservative, or worst-case, meaning we may
+ * predict more staleness than in practice in the following ways:
+ * <ul>
+ * <li>
+ *   We do not account for read repair. 
+ * </li>
+ * <li>
+ *   We do not account for Merkle tree exchange.
+ * </li>
+ * <li>
+ *   Multi-version staleness is particularly conservative.
+ * </li>
+ * <li>
+ *   We simulate non-local reads and writes. We assume that the
+ *   coordinating Cassandra node is not itself a replica for a given key.
+ * </li>
+ * </ul>
+ *
+ * <p>
+ * The predictions are optimistic in the following ways:
+ * <ul>
+ * <li>
+ *   We do not predict the impact of node failure.
+ * </li>
+ * <li>
+ *   We do not model hinted handoff.
+ * </li>
+ * </ul>
+ *
+ * @see org.apache.cassandra.thrift.ConsistencyLevel
+ * @see org.apache.cassandra.locator.AbstractReplicationStrategy
  */
 
 public class PBSPredictor implements PBSPredictorMBean
@@ -99,13 +130,13 @@ public class PBSPredictor implements PBSPredictorMBean
     public static final String MBEAN_NAME = "org.apache.cassandra.service:type=PBSPredictor";
 
     /*
-        We record a fixed size set of WARS latencies for read and
-        mutation operations.  We store the order in which each
-        operation arrived, and use an LRU policy to evict old
-        messages.
-
-        This information is stored as a mapping from messageIDs to
-        latencies.
+     * We record a fixed size set of WARS latencies for read and
+     * mutation operations.  We store the order in which each
+     * operation arrived, and use an LRU policy to evict old
+     * messages.
+     *
+     * This information is stored as a mapping from messageIDs to
+     * latencies.
      */
 
     private final Map<String, Long> messageIdToStartTimes = new ConcurrentHashMap<String, Long>();
@@ -182,11 +213,13 @@ public class PBSPredictor implements PBSPredictorMBean
         return list.get((int)(list.size()*percentile));
     }
 
-    // for our trials, sample the latency for the (replicaNumber)th
-    // reply for one of WARS
-    // if replicaNumber > the number of replicas we have data for
-    //    (say we have data for ReplicationFactor 2 but ask for N=3)
-    // then we randomly sample from all response times
+    /* 
+     * For our trials, sample the latency for the (replicaNumber)th
+     * reply for one of WARS
+     * if replicaNumber > the number of replicas we have data for
+     *   (say we have data for ReplicationFactor 2 but ask for N=3)
+     * then we randomly sample from all response times
+     */
     private long getRandomLatencySample(Map<Integer, List<Long>> samples, int replicaNumber)
     {
         if(samples.containsKey(replicaNumber))
@@ -198,11 +231,11 @@ public class PBSPredictor implements PBSPredictorMBean
     }
 
     /*
-        To perform the prediction, we randomly sample from the
-        collected WARS latencies, simulating writes followed by reads
-        exactly t milliseconds afterwards. We count the number of
-        reordered reads and writes to calculate the probability of
-        staleness along with recording operation latencies.
+     *  To perform the prediction, we randomly sample from the
+     *  collected WARS latencies, simulating writes followed by reads
+     *  exactly t milliseconds afterwards. We count the number of
+     *  reordered reads and writes to calculate the probability of
+     *  staleness along with recording operation latencies.
      */
 
     public PBSPredictionResult doPrediction(int n,
