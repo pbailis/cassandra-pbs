@@ -171,20 +171,26 @@ public class PBSPredictor implements PBSPredictorMBean
 
     public void init()
     {
-        if (!initialized) {
-          doLog = DatabaseDescriptor.logLatenciesForConsistencyPrediction();
-          random = new Random();
+        init(false);
+    }
 
-          MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
-          try
-          {
-              mbs.registerMBean(this, new ObjectName(PBSPredictor.MBEAN_NAME));
-          }
-          catch (Exception e)
-          {
-              throw new RuntimeException(e);
-          }
-          initialized = true;
+    public void init(boolean forcePrediction)
+    {
+        doLog = DatabaseDescriptor.logLatenciesForConsistencyPrediction() || forcePrediction;
+
+        if (!initialized) {
+            random = new Random();
+
+            MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
+            try
+            {
+                 mbs.registerMBean(this, new ObjectName(PBSPredictor.MBEAN_NAME));
+            }
+            catch (Exception e)
+            {
+                throw new RuntimeException(e);
+            }
+            initialized = true;
         }
     }
   	
@@ -238,6 +244,7 @@ public class PBSPredictor implements PBSPredictorMBean
      *  staleness along with recording operation latencies.
      */
 
+
     public PBSPredictionResult doPrediction(int n,
                                             int r,
                                             int w,
@@ -262,8 +269,10 @@ public class PBSPredictor implements PBSPredictorMBean
             Map<Integer, List<Long>> sLatencies = getOrderedSLatencies();
 
             if (wLatencies.isEmpty() || rLatencies.isEmpty() || 
-                aLatencies.isEmpty() || sLatencies.isEmpty()) {
-              return null;
+                aLatencies.isEmpty() || sLatencies.isEmpty())
+            {
+
+                return null;
             }
 
             // storage for simulated read and write latencies
@@ -329,8 +338,8 @@ public class PBSPredictor implements PBSPredictorMBean
                 // writeLatency+timeSinceWrite
 
                 for(int response = 0; response < r; ++response) {
-                    int replicaNumber = sortedReplicaReadLatencies.indexOf(sortedReplicaReadLatencies.get(0));
-                    // if the
+                    int replicaNumber = replicaReadLatencies.indexOf(sortedReplicaReadLatencies.remove(0));
+
                     if(writeLatency + timeSinceWrite + trialRLatencies.remove(replicaNumber) >=
                             trialWLatencies.remove(replicaNumber))
                     {
@@ -383,12 +392,17 @@ public class PBSPredictor implements PBSPredictorMBean
 
     public void startOperation(String id)
     {
+        startOperation(id, System.currentTimeMillis());
+    }
+
+    public void startOperation(String id, long startTime)
+    {
         if(!doLog)
             return;
 
         assert(!messageIdToStartTimes.containsKey(id));
 
-        messageIdToStartTimes.put(id, System.currentTimeMillis());
+        messageIdToStartTimes.put(id, startTime);
 
         messageIds.add(id);
 
@@ -412,6 +426,10 @@ public class PBSPredictor implements PBSPredictorMBean
 
     public void logWriteResponse(String id, MessageIn response)
     {
+        logWriteResponse(id, response.getCreationTime(), System.currentTimeMillis());
+    }
+
+    public void logWriteResponse(String id, long responseCreationTime, long receivedTime) {
         if(!doLog)
             return;
 
@@ -421,15 +439,13 @@ public class PBSPredictor implements PBSPredictorMBean
             return;
         }
 
-        long time = System.currentTimeMillis();
-
         Collection<Long> wLatencies = messageIdToWLatencies.get(id);
         if(wLatencies == null)
         {
             return;
         }
 
-        wLatencies.add(Math.max(0, response.creationTime - startTime));
+        wLatencies.add(Math.max(0, responseCreationTime - startTime));
 
         Collection<Long> aLatencies = messageIdToALatencies.get(id);
         if(aLatencies == null)
@@ -437,10 +453,15 @@ public class PBSPredictor implements PBSPredictorMBean
             return;
         }
 
-        aLatencies.add(Math.max(0, time - response.creationTime));
+        aLatencies.add(Math.max(0, receivedTime - responseCreationTime));
     }
 
     public void logReadResponse(String id, MessageIn response)
+    {
+        logReadResponse(id, response.getCreationTime(), System.currentTimeMillis());
+    }
+
+    public void logReadResponse(String id, long responseCreationTime, long receivedTime)
     {
         if(!doLog)
             return;
@@ -451,22 +472,20 @@ public class PBSPredictor implements PBSPredictorMBean
             return;
         }
 
-        long time = System.currentTimeMillis();
-
         Collection<Long> rLatencies = messageIdToRLatencies.get(id);
         if(rLatencies == null)
         {
             return;
         }
 
-        rLatencies.add(Math.max(0, response.creationTime-startTime));
+        rLatencies.add(Math.max(0, responseCreationTime-startTime));
 
         Collection<Long> sLatencies = messageIdToSLatencies.get(id);
         if(sLatencies == null)
         {
             return;
         }
-        sLatencies.add(Math.max(0, time-response.creationTime));
+        sLatencies.add(Math.max(0, receivedTime-responseCreationTime));
     }
 
     Map<Integer, List<Long>> getOrderedWLatencies()
