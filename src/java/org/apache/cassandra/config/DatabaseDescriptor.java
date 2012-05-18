@@ -1059,6 +1059,11 @@ public class DatabaseDescriptor
         return conf.log_latencies_for_consistency_prediction;
     }
 
+    public static void setLogLatenciesForConsistencyPrediction(boolean value)
+    {
+      conf.log_latencies_for_consistency_prediction = value;
+    }
+
     public static long getMaxLoggedLatenciesForConsistencyPrediction()
     {
         assert conf.max_logged_latencies_for_consistency_prediction > 0;
