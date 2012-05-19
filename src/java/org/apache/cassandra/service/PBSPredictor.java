@@ -278,7 +278,7 @@ public class PBSPredictor implements PBSPredictorMBean
         if (wLatencies.isEmpty() || rLatencies.isEmpty() ||
             aLatencies.isEmpty() || sLatencies.isEmpty())
         {
-            throw new InvalidRequestException("No latencies have been recorded");
+            throw new InvalidRequestException("No latencies have been recorded so far. Run some (non-local) inserts/reads.");
         }
 
         // storage for simulated read and write latencies
