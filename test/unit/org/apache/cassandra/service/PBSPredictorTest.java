@@ -44,67 +44,71 @@ public class PBSPredictorTest extends SchemaLoader
     @Test
     public void testDoPrediction()
     {
-        DatabaseDescriptor.setLogLatenciesForConsistencyPrediction(true);
-        predictor.init(true);
+        try {
+            DatabaseDescriptor.setLogLatenciesForConsistencyPrediction(true);
+            predictor.init(true);
 
-        /*
-            Ensure accuracy given a set of basic latencies
-            Predictions here match a prior Python implementation
-         */
+            /*
+                Ensure accuracy given a set of basic latencies
+                Predictions here match a prior Python implementation
+             */
 
-        for (int i = 0; i < 10; ++i)
-        {
-            createWriteResponse(10, 0, String.format("W%d", i));
-            createReadResponse(0, 0, String.format("R%d", i));
+            for (int i = 0; i < 10; ++i)
+            {
+                createWriteResponse(10, 0, String.format("W%d", i));
+                createReadResponse(0, 0, String.format("R%d", i));
+            }
+
+            for (int i = 0; i < 10; ++i)
+            {
+                createWriteResponse(0, 0, String.format("WS%d", i));
+            }
+
+            // 10ms after write
+            PBSPredictionResult result = predictor.doPrediction(2,1,1,10.0f,1, 0.99f);
+
+            assertEquals(1, result.getConsistencyProbability(), 0);
+            assertEquals(2.5, result.getAverageWriteLatency(), .5);
+
+            // 0ms after write
+            result = predictor.doPrediction(2,1,1,0f,1, 0.99f);
+
+            assertEquals(.75, result.getConsistencyProbability(), 0.05);
+
+            // k=5 versions staleness
+            result = predictor.doPrediction(2,1,1,5.0f,5, 0.99f);
+            assertEquals(.98, result.getConsistencyProbability(), 0.05);
+            assertEquals(2.5, result.getAverageWriteLatency(), .5);
+
+            for (int i = 0; i < 10; ++i)
+            {
+                createWriteResponse(20, 0, String.format("WL%d", i));
+            }
+
+            // 5ms after write
+            result = predictor.doPrediction(2,1,1,5.0f,1, 0.99f);
+
+            assertEquals(.67, result.getConsistencyProbability(), .05);
+
+            // N = 5
+            result = predictor.doPrediction(5,1,1,5.0f,1, 0.99f);
+
+            assertEquals(.42, result.getConsistencyProbability(), .05);
+            assertEquals(1.33, result.getAverageWriteLatency(), .5);
+
+            for (int i = 0; i < 10; ++i)
+            {
+                createWriteResponse(100, 100, String.format("WVL%d", i));
+                createReadResponse(100, 100, String.format("RL%d", i));
+            }
+
+            result = predictor.doPrediction(2,1,1,0f,1, 0.99f);
+
+            assertEquals(.808, result.getConsistencyProbability(), .05);
+            assertEquals(26.5, result.getAverageWriteLatency(), 1);
+            assertEquals(62.2, result.getAverageReadLatency(), 1);
+        } catch (Exception e) {
+            fail(e.getMessage());
         }
-
-        for (int i = 0; i < 10; ++i)
-        {
-            createWriteResponse(0, 0, String.format("WS%d", i));
-        }
-
-        // 10ms after write
-        PBSPredictionResult result = predictor.doPrediction(2,1,1,10.0f,1, 0.99f);
-
-        assertEquals(1, result.getConsistencyProbability(), 0);
-        assertEquals(2.5, result.getAverageWriteLatency(), .5);
-
-        // 0ms after write
-        result = predictor.doPrediction(2,1,1,0f,1, 0.99f);
-
-        assertEquals(.75, result.getConsistencyProbability(), 0.05);
-
-        // k=5 versions staleness
-        result = predictor.doPrediction(2,1,1,5.0f,5, 0.99f);
-        assertEquals(.98, result.getConsistencyProbability(), 0.05);
-        assertEquals(2.5, result.getAverageWriteLatency(), .5);
-
-        for (int i = 0; i < 10; ++i)
-        {
-            createWriteResponse(20, 0, String.format("WL%d", i));
-        }
-
-        // 5ms after write
-        result = predictor.doPrediction(2,1,1,5.0f,1, 0.99f);
-
-        assertEquals(.67, result.getConsistencyProbability(), .05);
-
-        // N = 5
-        result = predictor.doPrediction(5,1,1,5.0f,1, 0.99f);
-
-        assertEquals(.42, result.getConsistencyProbability(), .05);
-        assertEquals(1.33, result.getAverageWriteLatency(), .5);
-
-        for (int i = 0; i < 10; ++i)
-        {
-            createWriteResponse(100, 100, String.format("WVL%d", i));
-            createReadResponse(100, 100, String.format("RL%d", i));
-        }
-
-        result = predictor.doPrediction(2,1,1,0f,1, 0.99f);
-
-        assertEquals(.808, result.getConsistencyProbability(), .05);
-        assertEquals(26.5, result.getAverageWriteLatency(), 1);
-        assertEquals(62.2, result.getAverageReadLatency(), 1);
     }
 }

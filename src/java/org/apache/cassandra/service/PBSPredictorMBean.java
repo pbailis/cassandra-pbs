@@ -25,5 +25,5 @@ public interface PBSPredictorMBean
                                             int w,
                                             float timeSinceWrite, 
                                             int numberVersionsStale,
-                                            float percentileLatency);
+                                            float percentileLatency) throws Exception;
 }

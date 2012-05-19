@@ -20,8 +20,6 @@ package org.apache.cassandra.service;
 
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.net.MessageIn;
-import org.apache.cassandra.net.MessageOut;
-
 
 import java.lang.management.ManagementFactory;
 import java.util.*;
@@ -30,6 +28,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
 
+import org.apache.cassandra.thrift.InvalidRequestException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -250,144 +249,145 @@ public class PBSPredictor implements PBSPredictorMBean
                                             int w,
                                             float timeSinceWrite,
                                             int numberVersionsStale,
-                                            float percentileLatency)
+                                            float percentileLatency) throws Exception
     {
-        assert r <= n;
-        assert r > 0;
-        assert w <= n;
-        assert w > 0;
-        assert percentileLatency > 0 && percentileLatency < 1;
+        if(r > n)
+            throw new IllegalArgumentException("r must be less than n");
+        if(r < 0)
+            throw new IllegalArgumentException("r must be positive");
+        if(w > n)
+            throw new IllegalArgumentException("w must be less than n");
+        if(w < 0)
+            throw new IllegalArgumentException("w must be positive");
+        if(percentileLatency < 0 || percentileLatency > 1)
+            throw new IllegalArgumentException("percentileLatency must be between 0 and 1 inclusive");
+        if(numberVersionsStale < 0)
+            throw new IllegalArgumentException("numberVersionsStale must be positive");
 
         if(!doLog)
-            return null;
-
-        try {
-            // get a mapping of {replica number : latency} for each of WARS
-            Map<Integer, List<Long>> wLatencies = getOrderedWLatencies();
-            Map<Integer, List<Long>> aLatencies = getOrderedALatencies();
-            Map<Integer, List<Long>> rLatencies = getOrderedRLatencies();
-            Map<Integer, List<Long>> sLatencies = getOrderedSLatencies();
-
-            if (wLatencies.isEmpty() || rLatencies.isEmpty() || 
-                aLatencies.isEmpty() || sLatencies.isEmpty())
-            {
-
-                return null;
-            }
-
-            // storage for simulated read and write latencies
-            ArrayList<Long> readLatencies = new ArrayList<Long>();
-            ArrayList<Long> writeLatencies = new ArrayList<Long>();
-
-            long consistentReads = 0;
-
-            // storage for latencies for each replica for a given Monte Carlo trial
-            // arr[i] will hold the ith replica's latency for one of WARS
-            ArrayList<Long> trialWLatencies = new ArrayList<Long>();
-            ArrayList<Long> trialALatencies = new ArrayList<Long>();
-            ArrayList<Long> trialRLatencies = new ArrayList<Long>();
-            ArrayList<Long> trialSLatencies = new ArrayList<Long>();
-
-            ArrayList<Long> replicaWriteLatencies = new ArrayList<Long>();
-            ArrayList<Long> replicaReadLatencies = new ArrayList<Long>();
-
-            long numTrials = DatabaseDescriptor.getNumberTrialsForConsistencyPrediction();
-
-            //run repeated trials and observe staleness
-            for(long i = 0; i < numTrials; ++i)
-            {
-                //simulate sending a write to N replicas then sending a
-                //read to N replicas and record the latencies by randomly
-                //sampling from gathered latencies
-                for(int replicaNo = 0; replicaNo < n; ++replicaNo)
-                {
-                    long trialWLatency = getRandomLatencySample(wLatencies, replicaNo);
-                    long trialALatency = getRandomLatencySample(aLatencies, replicaNo);
-                    long trialRLatency = getRandomLatencySample(rLatencies, replicaNo);
-                    long trialSLatency = getRandomLatencySample(sLatencies, replicaNo);
-
-                    trialWLatencies.add(trialWLatency);
-                    trialALatencies.add(trialALatency);
-                    trialRLatencies.add(trialRLatency);
-                    trialSLatencies.add(trialSLatency);
-
-                    replicaWriteLatencies.add(trialWLatency + trialALatency);
-                    replicaReadLatencies.add(trialRLatency + trialSLatency);
-                }
-
-                // the write latency for this trial is the time it takes
-                // for the wth replica to respond (W+A)
-                Collections.sort(replicaWriteLatencies);
-                long writeLatency = replicaWriteLatencies.get(w-1);
-                writeLatencies.add(writeLatency);
-
-                ArrayList<Long> sortedReplicaReadLatencies = new ArrayList<Long>(replicaReadLatencies);
-                Collections.sort(sortedReplicaReadLatencies);
-
-                // the read latency for this trial is the time it takes
-                // for the rth replica to respond (R+S)
-                readLatencies.add(sortedReplicaReadLatencies.get(r-1));
-
-                // were all of the read responses reordered?
-
-                // for each of the first r messages (the ones the
-                // coordinator will pick from):
-                //--if the read message came in after this replica saw the
-                // write, it will be consistent
-                //--each read request is sent at time
-                // writeLatency+timeSinceWrite
-
-                for(int response = 0; response < r; ++response) {
-                    int replicaNumber = replicaReadLatencies.indexOf(sortedReplicaReadLatencies.remove(0));
-
-                    if(writeLatency + timeSinceWrite + trialRLatencies.remove(replicaNumber) >=
-                            trialWLatencies.remove(replicaNumber))
-                    {
-                        consistentReads++;
-                        break;
-                    }
-                }
-
-                // clear storage for the next trial
-                trialWLatencies.clear();
-                trialALatencies.clear();
-                trialRLatencies.clear();
-                trialSLatencies.clear();
-
-                replicaReadLatencies.clear();
-                replicaWriteLatencies.clear();
-            }
-
-            float oneVersionConsistencyProbability = (float)consistentReads/numTrials;
-
-            // to calculate multi-version staleness, we exponentiate the staleness probability by the number of versions
-            float consistencyProbability = (float) (1-Math.pow((double)(1-oneVersionConsistencyProbability),
-                                                               numberVersionsStale));
-
-            float averageWriteLatency = listAverage(writeLatencies);
-            float averageReadLatency = listAverage(readLatencies);
-
-            long percentileWriteLatency = getPercentile(writeLatencies, percentileLatency);
-            long percentileReadLatency = getPercentile(readLatencies, percentileLatency);
-
-            return new PBSPredictionResult(n,
-                                           r,
-                                           w,
-                                           timeSinceWrite,
-                                           numberVersionsStale,
-                                           consistencyProbability,
-                                           averageReadLatency,
-                                           averageWriteLatency,
-                                           percentileReadLatency,
-                                           percentileLatency,
-                                           percentileWriteLatency,
-                                           percentileLatency);
-        }
-        catch(Exception e)
         {
-            e.printStackTrace();
-            return null;
+            throw new InvalidRequestException("Latency logging is not enabled");
         }
+
+        // get a mapping of {replica number : latency} for each of WARS
+        Map<Integer, List<Long>> wLatencies = getOrderedWLatencies();
+        Map<Integer, List<Long>> aLatencies = getOrderedALatencies();
+        Map<Integer, List<Long>> rLatencies = getOrderedRLatencies();
+        Map<Integer, List<Long>> sLatencies = getOrderedSLatencies();
+
+        if (wLatencies.isEmpty() || rLatencies.isEmpty() ||
+            aLatencies.isEmpty() || sLatencies.isEmpty())
+        {
+            throw new InvalidRequestException("No latencies have been recorded");
+        }
+
+        // storage for simulated read and write latencies
+        ArrayList<Long> readLatencies = new ArrayList<Long>();
+        ArrayList<Long> writeLatencies = new ArrayList<Long>();
+
+        long consistentReads = 0;
+
+        // storage for latencies for each replica for a given Monte Carlo trial
+        // arr[i] will hold the ith replica's latency for one of WARS
+        ArrayList<Long> trialWLatencies = new ArrayList<Long>();
+        ArrayList<Long> trialALatencies = new ArrayList<Long>();
+        ArrayList<Long> trialRLatencies = new ArrayList<Long>();
+        ArrayList<Long> trialSLatencies = new ArrayList<Long>();
+
+        ArrayList<Long> replicaWriteLatencies = new ArrayList<Long>();
+        ArrayList<Long> replicaReadLatencies = new ArrayList<Long>();
+
+        long numTrials = DatabaseDescriptor.getNumberTrialsForConsistencyPrediction();
+
+        //run repeated trials and observe staleness
+        for(long i = 0; i < numTrials; ++i)
+        {
+            //simulate sending a write to N replicas then sending a
+            //read to N replicas and record the latencies by randomly
+            //sampling from gathered latencies
+            for(int replicaNo = 0; replicaNo < n; ++replicaNo)
+            {
+                long trialWLatency = getRandomLatencySample(wLatencies, replicaNo);
+                long trialALatency = getRandomLatencySample(aLatencies, replicaNo);
+                long trialRLatency = getRandomLatencySample(rLatencies, replicaNo);
+                long trialSLatency = getRandomLatencySample(sLatencies, replicaNo);
+
+                trialWLatencies.add(trialWLatency);
+                trialALatencies.add(trialALatency);
+                trialRLatencies.add(trialRLatency);
+                trialSLatencies.add(trialSLatency);
+
+                replicaWriteLatencies.add(trialWLatency + trialALatency);
+                replicaReadLatencies.add(trialRLatency + trialSLatency);
+            }
+
+            // the write latency for this trial is the time it takes
+            // for the wth replica to respond (W+A)
+            Collections.sort(replicaWriteLatencies);
+            long writeLatency = replicaWriteLatencies.get(w-1);
+            writeLatencies.add(writeLatency);
+
+            ArrayList<Long> sortedReplicaReadLatencies = new ArrayList<Long>(replicaReadLatencies);
+            Collections.sort(sortedReplicaReadLatencies);
+
+            // the read latency for this trial is the time it takes
+            // for the rth replica to respond (R+S)
+            readLatencies.add(sortedReplicaReadLatencies.get(r-1));
+
+            // were all of the read responses reordered?
+
+            // for each of the first r messages (the ones the
+            // coordinator will pick from):
+            //--if the read message came in after this replica saw the
+            // write, it will be consistent
+            //--each read request is sent at time
+            // writeLatency+timeSinceWrite
+
+            for(int responseNumber = 0; responseNumber < r; ++responseNumber) {
+                int replicaNumber = replicaReadLatencies.indexOf(sortedReplicaReadLatencies.get(responseNumber));
+
+                if(writeLatency + timeSinceWrite + trialRLatencies.get(replicaNumber) >=
+                        trialWLatencies.get(replicaNumber))
+                {
+                    consistentReads++;
+                    break;
+                }
+            }
+
+            // clear storage for the next trial
+            trialWLatencies.clear();
+            trialALatencies.clear();
+            trialRLatencies.clear();
+            trialSLatencies.clear();
+
+            replicaReadLatencies.clear();
+            replicaWriteLatencies.clear();
+        }
+
+        float oneVersionConsistencyProbability = (float)consistentReads/numTrials;
+
+        // to calculate multi-version staleness, we exponentiate the staleness probability by the number of versions
+        float consistencyProbability = (float) (1-Math.pow((double)(1-oneVersionConsistencyProbability),
+                                                           numberVersionsStale));
+
+        float averageWriteLatency = listAverage(writeLatencies);
+        float averageReadLatency = listAverage(readLatencies);
+
+        long percentileWriteLatency = getPercentile(writeLatencies, percentileLatency);
+        long percentileReadLatency = getPercentile(readLatencies, percentileLatency);
+
+        return new PBSPredictionResult(n,
+                                       r,
+                                       w,
+                                       timeSinceWrite,
+                                       numberVersionsStale,
+                                       consistencyProbability,
+                                       averageReadLatency,
+                                       averageWriteLatency,
+                                       percentileReadLatency,
+                                       percentileLatency,
+                                       percentileWriteLatency,
+                                       percentileLatency);
     }
 
     public void startOperation(String id)

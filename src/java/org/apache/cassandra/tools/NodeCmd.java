@@ -674,31 +674,31 @@ public class NodeCmd
                 if(w+r > replicationFactor+1)
                     continue;
 
-                PBSPredictionResult result = predictorMBean.doPrediction(replicationFactor,
-                                                                         r,
-                                                                         w,
-                                                                         timeAfterWrite,
-                                                                         numVersions,
-                                                                         percentileLatency);
+                try {
+                    PBSPredictionResult result = predictorMBean.doPrediction(replicationFactor,
+                                                                             r,
+                                                                             w,
+                                                                             timeAfterWrite,
+                                                                             numVersions,
+                                                                             percentileLatency);
 
-                if(result == null)
-                {
-                    output.println("Insufficient data. Is log_latencies_for_consistency_prediction enabled? Has this node handed any non-local reads and writes?");
-                    return;
+                    if(r == 1 && w == 1) {
+                        output.printf("%dms after a given write, with maximum version staleness of k=%d\n", timeAfterWrite, numVersions);
+                    }
+
+                    output.printf("N=%d, R=%d, W=%d\n", replicationFactor, r, w);
+                    output.printf("Probability of consistent reads: %f\n", result.getConsistencyProbability());
+                    output.printf("Average read latency: %fms (%.3fth %%ile %dms)\n", result.getAverageReadLatency(),
+                                                                                   result.getPercentileReadLatencyPercentile()*100,
+                                                                                   result.getPercentileReadLatencyValue());
+                    output.printf("Average write latency: %fms (%.3fth %%ile %dms)\n\n", result.getAverageWriteLatency(),
+                                                                                      result.getPercentileWriteLatencyPercentile()*100,
+                                                                                      result.getPercentileWriteLatencyValue());
+                } catch (Exception e) {
+                        System.out.println(e.getMessage());
+                        e.printStackTrace();
+                        return;
                 }
-
-                if(r == 1 && w == 1) {
-                    output.printf("%dms after a given write, with maximum version staleness of k=%d\n", timeAfterWrite, numVersions);
-                }
-
-                output.printf("N=%d, R=%d, W=%d\n", replicationFactor, r, w);
-                output.printf("Probability of consistent reads: %f\n", result.getConsistencyProbability());
-                output.printf("Average read latency: %fms (%.3fth %%ile %dms)\n", result.getAverageReadLatency(),
-                                                                               result.getPercentileReadLatencyPercentile()*100,
-                                                                               result.getPercentileReadLatencyValue());
-                output.printf("Average write latency: %fms (%.3fth %%ile %dms)\n\n", result.getAverageWriteLatency(),
-                                                                                  result.getPercentileWriteLatencyPercentile()*100,
-                                                                                  result.getPercentileWriteLatencyValue());
             }
         }
     }
