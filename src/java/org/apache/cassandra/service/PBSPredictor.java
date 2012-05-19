@@ -275,10 +275,14 @@ public class PBSPredictor implements PBSPredictorMBean
         Map<Integer, List<Long>> rLatencies = getOrderedRLatencies();
         Map<Integer, List<Long>> sLatencies = getOrderedSLatencies();
 
-        if (wLatencies.isEmpty() || rLatencies.isEmpty() ||
-            aLatencies.isEmpty() || sLatencies.isEmpty())
+        if (wLatencies.isEmpty() || aLatencies.isEmpty())
         {
-            throw new InvalidRequestException("No latencies have been recorded so far. Run some (non-local) inserts/reads.");
+            throw new InvalidRequestException("No write latencies have been recorded so far. Run some (non-local) inserts.");
+        }
+
+        if (rLatencies.isEmpty() || sLatencies.isEmpty())
+        {
+            throw new InvalidRequestException("No read latencies have been recorded so far. Run some (non-local) reads.");
         }
 
         // storage for simulated read and write latencies
