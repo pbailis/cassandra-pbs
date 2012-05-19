@@ -54,7 +54,6 @@ public class ResponseVerbHandler implements IVerbHandler
 
             if (logger.isDebugEnabled())
                 logger.debug("Processing response on a callback from " + id + "@" + message.from);
-
             ((IAsyncCallback) cb).response(message);
         }
         else
