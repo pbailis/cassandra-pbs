@@ -6,9 +6,14 @@
  * (CLI) jline version is bumped to 1.0 to properly  support
    'delete' key function (CASSANDRA-4132)
  * Save IndexSummary into new SSTable 'Summary' component (CASSANDRA-2392)
+ * Add support for range tombstones (CASSANDRA-3708)
 
 
 1.1.1-dev
+ * ignore min/max compactions settings in LCS, while preserving
+   behavior that min=max=0 disables autocompaction (CASSANDRA-4233)
+ * log number of rows read from saved cache (CASSANDRA-4249)
+ * calculate exact size required for cleanup operations (CASSANDRA-1404)
  * avoid blocking additional writes during flush when the commitlog
    gets behind temporarily (CASSANDRA-1991)
  * enable caching on index CFs based on data CF cache setting (CASSANDRA-4197)
@@ -50,6 +55,13 @@
    (CASSANDRA-4187)
  * Fix exception during move when localhost is the only source (CASSANDRA-4200)
  * (cql3) Allow paging through non-ordered partitioner results (CASSANDRA-3771)
+ * (cql3) Fix drop index (CASSANDRA-4192)
+ * (cql3) Don't return range ghosts anymore (CASSANDRA-3982)
+ * fix the problem re-creating Keyspace/ColumnFamily (CASSANDRA-4219)
+ * fix SecondaryIndex LelevedManifest save upon snapshot (CASSANDRA-4230)
+ * fix missing arrayOffset in FBUtilities.hash (CASSANDRA-4250)
+ * (cql3) Add name of parameters in CqlResultSet (CASSANDRA-4242)
+ * (cql3) Correctly validat order by queries (CASSANDRA-4246)
 Merged from 1.0:
  * Fix super columns bug where cache is not updated (CASSANDRA-4190)
  * fix maxTimestamp to include row tombstones (CASSANDRA-4116)
@@ -60,7 +72,7 @@ Merged from 1.0:
  * stress tool to return appropriate exit code on failure (CASSANDRA-4188)
  * fix compaction NPE when out of disk space and assertions disabled
    (CASSANDRA-3985)
-
+ * ensure unique streaming session id's (CASSANDRA-4223)
 
 1.1.0-final
  * average a reduced liveRatio estimate with the previous one (CASSANDRA-4065)

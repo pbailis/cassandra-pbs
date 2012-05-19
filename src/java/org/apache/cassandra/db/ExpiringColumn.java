@@ -74,14 +74,20 @@ public class ExpiringColumn extends Column
     }
 
     @Override
-    public int size(TypeSizes typeSizes)
+    public int dataSize()
+    {
+        return super.dataSize() + TypeSizes.NATIVE.sizeof(localExpirationTime) + TypeSizes.NATIVE.sizeof(timeToLive);
+    }
+
+    @Override
+    public int serializedSize(TypeSizes typeSizes)
     {
         /*
          * An expired column adds to a Column :
          *    4 bytes for the localExpirationTime
          *  + 4 bytes for the timeToLive
         */
-        return super.size(typeSizes) + typeSizes.sizeof(localExpirationTime) + typeSizes.sizeof(timeToLive);
+        return super.serializedSize(typeSizes) + typeSizes.sizeof(localExpirationTime) + typeSizes.sizeof(timeToLive);
     }
 
     @Override

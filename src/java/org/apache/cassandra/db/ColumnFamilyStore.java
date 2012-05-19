@@ -42,7 +42,7 @@ import org.apache.cassandra.concurrent.JMXEnabledThreadPoolExecutor;
 import org.apache.cassandra.concurrent.NamedThreadFactory;
 import org.apache.cassandra.concurrent.StageManager;
 import org.apache.cassandra.config.*;
-import org.apache.cassandra.db.columniterator.IColumnIterator;
+import org.apache.cassandra.db.columniterator.OnDiskAtomIterator;
 import org.apache.cassandra.db.commitlog.CommitLog;
 import org.apache.cassandra.db.commitlog.ReplayPosition;
 import org.apache.cassandra.db.compaction.AbstractCompactionStrategy;
@@ -65,8 +65,6 @@ import org.apache.cassandra.service.CacheService;
 import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.thrift.IndexExpression;
 import org.apache.cassandra.utils.*;
-import org.apache.cassandra.utils.IntervalTree.Interval;
-import org.apache.cassandra.utils.IntervalTree.IntervalTree;
 import org.cliffc.high_scale_lib.NonBlockingHashMap;
 
 import static org.apache.cassandra.config.CFMetaData.Caching;
@@ -322,7 +320,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
             Descriptor desc = entry.getKey();
             generations.add(desc.generation);
             if (!desc.isCompatible())
-                throw new RuntimeException(String.format("Can't open incompatible SSTable! Current version %s, found file: %s", Descriptor.CURRENT_VERSION, desc));
+                throw new RuntimeException(String.format("Can't open incompatible SSTable! Current version %s, found file: %s", Descriptor.Version.CURRENT, desc));
         }
         Collections.sort(generations);
         int value = (generations.size() > 0) ? (generations.get(generations.size() - 1)) : 0;
@@ -417,6 +415,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
                                                    Integer.MIN_VALUE,
                                                    true);
             CacheService.instance.rowCache.put(new RowCacheKey(metadata.cfId, key), data);
+            cachedRowsRead++;
         }
 
         if (cachedRowsRead > 0)
@@ -464,7 +463,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
 
             if (!descriptor.isCompatible())
                 throw new RuntimeException(String.format("Can't open incompatible SSTable! Current version %s, found file: %s",
-                                                         Descriptor.CURRENT_VERSION,
+                                                         Descriptor.Version.CURRENT,
                                                          descriptor));
 
             Descriptor newDescriptor = new Descriptor(descriptor.version,
@@ -556,7 +555,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
      * When the sstable object is closed, it will be renamed to a non-temporary
      * format, so incomplete sstables can be recognized and removed on startup.
      */
-    public String getFlushPath(long estimatedSize, String version)
+    public String getFlushPath(long estimatedSize, Descriptor.Version version)
     {
         File location = directories.getDirectoryForNewSSTables(estimatedSize);
         if (location == null)
@@ -564,7 +563,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         return getTempSSTablePath(location, version);
     }
 
-    public String getTempSSTablePath(File directory, String version)
+    public String getTempSSTablePath(File directory, Descriptor.Version version)
     {
         Descriptor desc = new Descriptor(version,
                                          directory,
@@ -577,7 +576,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
 
     public String getTempSSTablePath(File directory)
     {
-        return getTempSSTablePath(directory, Descriptor.CURRENT_VERSION);
+        return getTempSSTablePath(directory, Descriptor.Version.CURRENT);
     }
 
     /** flush the given memtable and swap in a new one for its CFS, if it hasn't been frozen already.  threadsafe. */
@@ -757,11 +756,8 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
 
     public static ColumnFamily removeDeletedCF(ColumnFamily cf, int gcBefore)
     {
-        if (cf.getColumnCount() == 0 && (!cf.isMarkedForDelete() || cf.getLocalDeletionTime() < gcBefore))
-            return null;
-
         cf.maybeResetDeletionTimes(gcBefore);
-        return cf;
+        return cf.getColumnCount() == 0 && !cf.isMarkedForDelete() ? null : cf;
     }
 
     /*
@@ -797,10 +793,9 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
             IColumn c = iter.next();
             ByteBuffer cname = c.name();
             // remove columns if
-            // (a) the column itself is tombstoned or
-            // (b) the CF is tombstoned and the column is not newer than it
-            if (c.getLocalDeletionTime() < gcBefore
-                || c.timestamp() <= cf.getMarkedForDeleteAt())
+            // (a) the column itself is gcable or
+            // (b) the column is shadowed by a CF tombstone
+            if (c.getLocalDeletionTime() < gcBefore || cf.deletionInfo().isDeleted(c))
             {
                 iter.remove();
             }
@@ -816,27 +811,25 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         while (iter.hasNext())
         {
             SuperColumn c = (SuperColumn)iter.next();
-            long minTimestamp = Math.max(c.getMarkedForDeleteAt(), cf.getMarkedForDeleteAt());
             Iterator<IColumn> subIter = c.getSubColumns().iterator();
             while (subIter.hasNext())
             {
                 IColumn subColumn = subIter.next();
                 // remove subcolumns if
-                // (a) the subcolumn itself is tombstoned or
-                // (b) the supercolumn is tombstoned and the subcolumn is not newer than it
-                if (subColumn.timestamp() <= minTimestamp
-                    || subColumn.getLocalDeletionTime() < gcBefore)
+                // (a) the subcolumn itself is gcable or
+                // (b) the supercolumn is shadowed by the CF and the column is not newer
+                // (b) the subcolumn is shadowed by the supercolumn
+                if (subColumn.getLocalDeletionTime() < gcBefore
+                    || cf.deletionInfo().isDeleted(c.name(), subColumn.timestamp())
+                    || c.deletionInfo().isDeleted(subColumn))
                 {
                     subIter.remove();
                 }
             }
-            if (c.getSubColumns().isEmpty() && (!c.isMarkedForDelete() || c.getLocalDeletionTime() < gcBefore))
+            c.maybeResetDeletionTimes(gcBefore);
+            if (c.getSubColumns().isEmpty() && !c.isMarkedForDelete())
             {
                 iter.remove();
-            }
-            else
-            {
-                c.maybeResetDeletionTimes(gcBefore);
             }
         }
     }
@@ -853,12 +846,12 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         if (sstables.isEmpty())
             return ImmutableSet.of();
 
-        IntervalTree<SSTableReader> tree = data.getView().intervalTree;
+        DataTracker.SSTableIntervalTree tree = data.getView().intervalTree;
 
         Set<SSTableReader> results = null;
         for (SSTableReader sstable : sstables)
         {
-            Set<SSTableReader> overlaps = ImmutableSet.copyOf(tree.search(new Interval<SSTableReader>(sstable.first, sstable.last)));
+            Set<SSTableReader> overlaps = ImmutableSet.copyOf(tree.search(Interval.<RowPosition, SSTableReader>create(sstable.first, sstable.last)));
             assert overlaps.contains(sstable);
             results = results == null ? overlaps : Sets.union(results, overlaps);
         }
@@ -888,17 +881,35 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         CompactionManager.instance.submitBackground(this);
     }
 
-    /*
-     * Add up all the files sizes this is the worst case file
+    /**
+     * Calculate expected file size of SSTable after compaction.
+     *
+     * If operation type is {@code CLEANUP}, then we calculate expected file size
+     * with checking token range to be eliminated.
+     * Other than that, we just add up all the files' size, which is the worst case file
      * size for compaction of all the list of files given.
+     *
+     * @param sstables SSTables to calculate expected compacted file size
+     * @param operation Operation type
+     * @return Expected file size of SSTable after compaction
      */
-    public long getExpectedCompactedFileSize(Iterable<SSTableReader> sstables)
+    public long getExpectedCompactedFileSize(Iterable<SSTableReader> sstables, OperationType operation)
     {
         long expectedFileSize = 0;
-        for (SSTableReader sstable : sstables)
+        if (operation == OperationType.CLEANUP)
         {
-            long size = sstable.onDiskLength();
-            expectedFileSize = expectedFileSize + size;
+            Collection<Range<Token>> ranges = StorageService.instance.getLocalRanges(table.name);
+            for (SSTableReader sstable : sstables)
+            {
+                List<Pair<Long, Long>> positions = sstable.getPositionsForRanges(ranges);
+                for (Pair<Long, Long> position : positions)
+                    expectedFileSize += position.right - position.left;
+            }
+        }
+        else
+        {
+            for (SSTableReader sstable : sstables)
+                expectedFileSize += sstable.onDiskLength();
         }
         return expectedFileSize;
     }
@@ -1194,8 +1205,8 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
     ColumnFamily filterColumnFamily(ColumnFamily cached, QueryFilter filter, int gcBefore)
     {
         ColumnFamily cf = cached.cloneMeShallow(ArrayBackedSortedColumns.factory(), filter.filter.isReversed());
-        IColumnIterator ci = filter.getMemtableColumnIterator(cached, null);
-        filter.collateColumns(cf, Collections.singletonList(ci), gcBefore);
+        OnDiskAtomIterator ci = filter.getMemtableColumnIterator(cached, null);
+        filter.collateOnDiskAtom(cf, Collections.singletonList(ci), gcBefore);
         // TODO this is necessary because when we collate supercolumns together, we don't check
         // their subcolumns for relevance, so we need to do a second prune post facto here.
         return cf.isSuper() ? removeDeleted(cf, gcBefore) : removeDeletedCF(cf, gcBefore);
@@ -1245,7 +1256,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         while (true)
         {
             view = data.getView();
-            sstables = view.intervalTree.search(new Interval(key, key));
+            sstables = view.intervalTree.search(key);
             if (SSTableReader.acquireReferences(sstables))
                 break;
             // retry w/ new view
@@ -1265,9 +1276,17 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         {
             view = data.getView();
             // startAt == minimum is ok, but stopAt == minimum is confusing because all IntervalTree deals with
-            // is Comparable, so it won't know to special-case that.
-            Comparable stopInTree = stopAt.isMinimum() ? view.intervalTree.max() : stopAt;
-            sstables = view.intervalTree.search(new Interval(startWith, stopInTree));
+            // is Comparable, so it won't know to special-case that. However max() should not be call if the
+            // intervalTree is empty sochecking that first
+            //
+            if (view.intervalTree.isEmpty())
+            {
+                sstables = Collections.<SSTableReader>emptyList();
+                break;
+            }
+
+            RowPosition stopInTree = stopAt.isMinimum() ? view.intervalTree.max() : stopAt;
+            sstables = view.intervalTree.search(Interval.<RowPosition, SSTableReader>create(startWith, stopInTree));
             if (SSTableReader.acquireReferences(sstables))
                 break;
             // retry w/ new view
@@ -1454,8 +1473,8 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
                                      " created in " + snapshotDirectory);
                 }
 
-                if (compactionStrategy instanceof LeveledCompactionStrategy)
-                    directories.snapshotLeveledManifest(snapshotName);
+                if (cfs.compactionStrategy instanceof LeveledCompactionStrategy)
+                    cfs.directories.snapshotLeveledManifest(snapshotName);
             }
             catch (IOException e)
             {
@@ -1895,7 +1914,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
     public SSTableWriter createFlushWriter(long estimatedRows, long estimatedSize, ReplayPosition context) throws IOException
     {
         SSTableMetadata.Collector sstableMetadataCollector = SSTableMetadata.createCollector().replayPosition(context);
-        return new SSTableWriter(getFlushPath(estimatedSize, Descriptor.CURRENT_VERSION),
+        return new SSTableWriter(getFlushPath(estimatedSize, Descriptor.Version.CURRENT),
                                  estimatedRows,
                                  metadata,
                                  partitioner,
