@@ -356,6 +356,10 @@ public class PBSPredictor implements PBSPredictorMBean
                     consistentReads++;
                     break;
                 }
+
+                // tombstone this replica in the case that we have
+                // duplicate read latencies
+                replicaReadLatencies.set(replicaNumber, -1L);
             }
 
             // clear storage for the next trial
