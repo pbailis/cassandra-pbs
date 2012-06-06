@@ -107,6 +107,10 @@ public class PBSPredictorTest extends SchemaLoader
             assertEquals(.808, result.getConsistencyProbability(), .05);
             assertEquals(26.5, result.getAverageWriteLatency(), 1);
             assertEquals(62.2, result.getAverageReadLatency(), 1);
+
+            result = predictor.doPrediction(2,2,1,0f,1, 0.99f);
+
+            assertEquals(1, result.getConsistencyProbability(), 0);
         } catch (Exception e) {
             fail(e.getMessage());
         }
