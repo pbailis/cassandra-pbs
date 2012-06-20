@@ -158,10 +158,6 @@ public class Config
         loadYaml = value;
     }
 
-    public boolean log_latencies_for_consistency_prediction = false;
-    public long max_logged_latencies_for_consistency_prediction = 10000;
-    public long number_trials_for_consistency_prediction = 10000;
-
     public static enum CommitLogSync {
         periodic,
         batch

@@ -31,13 +31,13 @@ public class PBSPredictorTest extends SchemaLoader
 
     private void createWriteResponse(long W, long A, String id)
     {
-        predictor.startOperation(id, 0);
+        predictor.startWriteOperation(id, 0);
         predictor.logWriteResponse(id, W, W+A);
     }
 
     private void createReadResponse(long R, long S, String id)
     {
-        predictor.startOperation(id, 0);
+        predictor.startReadOperation(id, 0);
         predictor.logReadResponse(id, R, R+S);
     }
 
@@ -45,8 +45,8 @@ public class PBSPredictorTest extends SchemaLoader
     public void testDoPrediction()
     {
         try {
-            DatabaseDescriptor.setLogLatenciesForConsistencyPrediction(true);
-            predictor.init(true);
+            predictor.enableConsistencyPredictionLogging();
+            predictor.init();
 
             /*
                 Ensure accuracy given a set of basic latencies

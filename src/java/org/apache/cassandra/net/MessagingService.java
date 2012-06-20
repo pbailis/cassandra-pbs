@@ -543,9 +543,13 @@ public final class MessagingService implements MessagingServiceMBean
     {
         String id = addCallback(cb, message, to, timeout);
 
-        if(cb instanceof IWriteResponseHandler || cb instanceof ReadCallback)
+        if(cb instanceof IWriteResponseHandler)
         {
-            PBSPredictor.instance().startOperation(id);
+            PBSPredictor.instance().startWriteOperation(id);
+        }
+        else if(cb instanceof ReadCallback)
+        {
+            PBSPredictor.instance().startReadOperation(id);
         }
 
         sendOneWay(message, id, to);

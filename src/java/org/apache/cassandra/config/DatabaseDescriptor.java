@@ -1054,28 +1054,6 @@ public class DatabaseDescriptor
         return rowCacheProvider;
     }
 
-    public static boolean logLatenciesForConsistencyPrediction()
-    {
-        return conf.log_latencies_for_consistency_prediction;
-    }
-
-    public static void setLogLatenciesForConsistencyPrediction(boolean value)
-    {
-      conf.log_latencies_for_consistency_prediction = value;
-    }
-
-    public static long getMaxLoggedLatenciesForConsistencyPrediction()
-    {
-        assert conf.max_logged_latencies_for_consistency_prediction > 0;
-        return conf.max_logged_latencies_for_consistency_prediction;
-    }
-
-    public static long getNumberTrialsForConsistencyPrediction()
-    {
-        assert conf.number_trials_for_consistency_prediction > 0;
-        return conf.number_trials_for_consistency_prediction;
-    }
-
     public static int getStreamingSocketTimeout()
     {
         return conf.streaming_socket_timeout_in_ms;

@@ -127,6 +127,9 @@ public class PBSPredictor implements PBSPredictorMBean
     private static final Logger logger = LoggerFactory.getLogger(PBSPredictor.class);
 
     public static final String MBEAN_NAME = "org.apache.cassandra.service:type=PBSPredictor";
+    private static final boolean DEFAULT_DO_LOG_LATENCIES = true;
+    private static final int DEFAULT_MAX_LOGGED_LATENCIES = 10000;
+    private static final int DEFAULT_NUMBER_TRIALS_PREDICTION = 10000;
 
     /*
      * We record a fixed size set of WARS latencies for read and
@@ -141,7 +144,8 @@ public class PBSPredictor implements PBSPredictorMBean
     private final Map<String, Long> messageIdToStartTimes = new ConcurrentHashMap<String, Long>();
 
     // used for LRU replacement
-    private final Queue<String> messageIds = new ConcurrentLinkedQueue<String>();
+    private final Queue<String> writeMessageIds = new ConcurrentLinkedQueue<String>();
+    private final Queue<String> readMessageIds = new ConcurrentLinkedQueue<String>();
 
     private final Map<String, Collection<Long>> messageIdToWLatencies =
             new ConcurrentHashMap<String, Collection<Long>>();
@@ -153,8 +157,11 @@ public class PBSPredictor implements PBSPredictorMBean
             new ConcurrentHashMap<String, Collection<Long>>();
 
     private Random random;
-    private boolean doLog = false;
     private boolean initialized = false;
+
+    private boolean doLogLatencies = DEFAULT_DO_LOG_LATENCIES;
+    private int maxLoggedLatencies = DEFAULT_MAX_LOGGED_LATENCIES;
+    private int numberTrialsPrediction = DEFAULT_NUMBER_TRIALS_PREDICTION;
 
     private static final PBSPredictor instance = new PBSPredictor();
 
@@ -168,15 +175,27 @@ public class PBSPredictor implements PBSPredictorMBean
         init();
     }
 
-    public void init()
+    public void enableConsistencyPredictionLogging()
     {
-        init(false);
+        doLogLatencies = true;
+    }
+    public void disableConsistencyPredictionLogging()
+    {
+        doLogLatencies = false;
     }
 
-    public void init(boolean forcePrediction)
+    public void setMaxLoggedLatenciesForConsistencyPrediction(int maxLogged)
     {
-        doLog = DatabaseDescriptor.logLatenciesForConsistencyPrediction() || forcePrediction;
+        maxLoggedLatencies = maxLogged;
+    }
 
+    public void setNumberTrialsForConsistencyPrediction(int numTrials)
+    {
+        numberTrialsPrediction = numTrials;
+    }
+
+    public void init()
+    {
         if (!initialized) {
             random = new Random();
 
@@ -264,7 +283,7 @@ public class PBSPredictor implements PBSPredictorMBean
         if(numberVersionsStale < 0)
             throw new IllegalArgumentException("numberVersionsStale must be positive");
 
-        if(!doLog)
+        if(!doLogLatencies)
         {
             throw new InvalidRequestException("Latency logging is not enabled");
         }
@@ -301,10 +320,8 @@ public class PBSPredictor implements PBSPredictorMBean
         ArrayList<Long> replicaWriteLatencies = new ArrayList<Long>();
         ArrayList<Long> replicaReadLatencies = new ArrayList<Long>();
 
-        long numTrials = DatabaseDescriptor.getNumberTrialsForConsistencyPrediction();
-
         //run repeated trials and observe staleness
-        for(long i = 0; i < numTrials; ++i)
+        for(int i = 0; i < numberTrialsPrediction; ++i)
         {
             //simulate sending a write to N replicas then sending a
             //read to N replicas and record the latencies by randomly
@@ -372,7 +389,7 @@ public class PBSPredictor implements PBSPredictorMBean
             replicaWriteLatencies.clear();
         }
 
-        float oneVersionConsistencyProbability = (float)consistentReads/numTrials;
+        float oneVersionConsistencyProbability = (float)consistentReads/numberTrialsPrediction;
 
         // to calculate multi-version staleness, we exponentiate the staleness probability by the number of versions
         float consistencyProbability = (float) (1-Math.pow((double)(1-oneVersionConsistencyProbability),
@@ -398,36 +415,62 @@ public class PBSPredictor implements PBSPredictorMBean
                                        percentileLatency);
     }
 
-    public void startOperation(String id)
+    public void startWriteOperation(String id)
     {
-        startOperation(id, System.currentTimeMillis());
+        startWriteOperation(id, System.currentTimeMillis());
     }
 
-    public void startOperation(String id, long startTime)
+    public void startWriteOperation(String id, long startTime)
     {
-        if(!doLog)
+        if(!doLogLatencies)
+            return;
+
+        assert(!messageIdToWLatencies.containsKey(id));
+
+        messageIdToStartTimes.put(id, startTime);
+
+        writeMessageIds.add(id);
+
+        // LRU replacement of latencies
+        // the maximum number of entries is sloppy, but that's acceptable for our purposes
+        if(writeMessageIds.size() > maxLoggedLatencies)
+        {
+            String toEvict = writeMessageIds.remove();
+            messageIdToStartTimes.remove(toEvict);
+            messageIdToWLatencies.remove(toEvict);
+            messageIdToALatencies.remove(toEvict);
+        }
+
+        messageIdToWLatencies.put(id, new ConcurrentLinkedQueue<Long>());
+        messageIdToALatencies.put(id, new ConcurrentLinkedQueue<Long>());
+    }
+
+    public void startReadOperation(String id)
+    {
+        startReadOperation(id, System.currentTimeMillis());
+    }
+
+    public void startReadOperation(String id, long startTime)
+    {
+        if(!doLogLatencies)
             return;
 
         assert(!messageIdToStartTimes.containsKey(id));
 
         messageIdToStartTimes.put(id, startTime);
 
-        messageIds.add(id);
+        readMessageIds.add(id);
 
         // LRU replacement of latencies
         // the maximum number of entries is sloppy, but that's acceptable for our purposes
-        if(messageIds.size() > DatabaseDescriptor.getMaxLoggedLatenciesForConsistencyPrediction())
+        if(readMessageIds.size() > maxLoggedLatencies)
         {
-            String toEvict = messageIds.remove();
+            String toEvict = readMessageIds.remove();
             messageIdToStartTimes.remove(toEvict);
-            messageIdToWLatencies.remove(toEvict);
-            messageIdToALatencies.remove(toEvict);
             messageIdToRLatencies.remove(toEvict);
             messageIdToSLatencies.remove(toEvict);
         }
 
-        messageIdToWLatencies.put(id, new ConcurrentLinkedQueue<Long>());
-        messageIdToALatencies.put(id, new ConcurrentLinkedQueue<Long>());
         messageIdToRLatencies.put(id, new ConcurrentLinkedQueue<Long>());
         messageIdToSLatencies.put(id, new ConcurrentLinkedQueue<Long>());
     }
@@ -438,7 +481,7 @@ public class PBSPredictor implements PBSPredictorMBean
     }
 
     public void logWriteResponse(String id, long responseCreationTime, long receivedTime) {
-        if(!doLog)
+        if(!doLogLatencies)
             return;
 
         Long startTime = messageIdToStartTimes.get(id);
@@ -471,7 +514,7 @@ public class PBSPredictor implements PBSPredictorMBean
 
     public void logReadResponse(String id, long responseCreationTime, long receivedTime)
     {
-        if(!doLog)
+        if(!doLogLatencies)
             return;
 
         Long startTime = messageIdToStartTimes.get(id);
