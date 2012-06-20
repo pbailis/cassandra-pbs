@@ -425,7 +425,7 @@ public class PBSPredictor implements PBSPredictorMBean
         if(!doLogLatencies)
             return;
 
-        assert(!messageIdToWLatencies.containsKey(id));
+        assert(!messageIdToStartTimes.containsKey(id));
 
         messageIdToStartTimes.put(id, startTime);
 
