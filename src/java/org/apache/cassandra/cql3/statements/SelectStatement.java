@@ -32,6 +32,7 @@ import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.IColumn;
 import org.apache.cassandra.db.CounterColumn;
 import org.apache.cassandra.db.ColumnFamily;
+import org.apache.cassandra.db.ExpiringColumn;
 import org.apache.cassandra.db.RangeSliceCommand;
 import org.apache.cassandra.db.ReadCommand;
 import org.apache.cassandra.db.Row;
@@ -40,11 +41,8 @@ import org.apache.cassandra.db.SliceByNamesReadCommand;
 import org.apache.cassandra.db.SliceFromReadCommand;
 import org.apache.cassandra.db.Table;
 import org.apache.cassandra.db.context.CounterContext;
-import org.apache.cassandra.db.filter.QueryPath;
-import org.apache.cassandra.db.marshal.AbstractType;
-import org.apache.cassandra.db.marshal.CompositeType;
-import org.apache.cassandra.db.marshal.ReversedType;
-import org.apache.cassandra.db.marshal.TypeParser;
+import org.apache.cassandra.db.filter.*;
+import org.apache.cassandra.db.marshal.*;
 import org.apache.cassandra.dht.*;
 import org.apache.cassandra.service.ClientState;
 import org.apache.cassandra.service.StorageProxy;
@@ -59,12 +57,11 @@ import org.apache.cassandra.thrift.IndexExpression;
 import org.apache.cassandra.thrift.IndexOperator;
 import org.apache.cassandra.thrift.InvalidRequestException;
 import org.apache.cassandra.thrift.RequestType;
-import org.apache.cassandra.thrift.SlicePredicate;
-import org.apache.cassandra.thrift.SliceRange;
 import org.apache.cassandra.thrift.ThriftValidation;
 import org.apache.cassandra.thrift.TimedOutException;
 import org.apache.cassandra.thrift.UnavailableException;
 import org.apache.cassandra.utils.ByteBufferUtil;
+import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.Pair;
 
 /**
@@ -80,7 +77,7 @@ public class SelectStatement implements CQLStatement
     private final int boundTerms;
     public final CFDefinition cfDef;
     public final Parameters parameters;
-    private final List<Pair<CFDefinition.Name, ColumnIdentifier>> selectedNames = new ArrayList<Pair<CFDefinition.Name, ColumnIdentifier>>(); // empty => wildcard
+    private final List<Pair<CFDefinition.Name, Selector>> selectedNames = new ArrayList<Pair<CFDefinition.Name, Selector>>(); // empty => wildcard
 
     private Restriction keyRestriction;
     private final Restriction[] columnRestrictions;
@@ -198,20 +195,16 @@ public class SelectStatement implements CQLStatement
             ByteBuffer start = getRequestedBound(isReversed ? Bound.END : Bound.START, variables);
             ByteBuffer finish = getRequestedBound(isReversed ? Bound.START : Bound.END, variables);
 
+            SliceQueryFilter filter = new SliceQueryFilter(start, finish, isReversed, getLimit());
+            QueryProcessor.validateSliceFilter(cfDef.cfm, filter);
+
             // Note that we use the total limit for every key. This is
             // potentially inefficient, but then again, IN + LIMIT is not a
             // very sensible choice
             for (ByteBuffer key : keys)
             {
                 QueryProcessor.validateKey(key);
-                QueryProcessor.validateSliceRange(cfDef.cfm, start, finish, isReversed);
-                commands.add(new SliceFromReadCommand(keyspace(),
-                                                      key,
-                                                      queryPath,
-                                                      start,
-                                                      finish,
-                                                      isReversed,
-                                                      getLimit()));
+                commands.add(new SliceFromReadCommand(keyspace(), key, queryPath, filter));
             }
         }
         // ...of a list of column names
@@ -245,9 +238,8 @@ public class SelectStatement implements CQLStatement
     {
         List<Row> rows;
 
-        // XXX: Our use of Thrift structs internally makes me Sad. :(
-        SlicePredicate thriftSlicePredicate = makeSlicePredicate(variables);
-        QueryProcessor.validateSlicePredicate(cfDef.cfm, thriftSlicePredicate);
+        IFilter filter =  makeFilter(variables);
+        QueryProcessor.validateFilter(cfDef.cfm, filter);
 
         List<IndexExpression> expressions = getIndexExpressions(variables);
 
@@ -256,7 +248,7 @@ public class SelectStatement implements CQLStatement
             rows = StorageProxy.getRangeSlice(new RangeSliceCommand(keyspace(),
                                                                     columnFamily(),
                                                                     null,
-                                                                    thriftSlicePredicate,
+                                                                    filter,
                                                                     getKeyBounds(variables),
                                                                     expressions,
                                                                     getLimit(),
@@ -319,25 +311,20 @@ public class SelectStatement implements CQLStatement
         return bounds;
     }
 
-    private SlicePredicate makeSlicePredicate(List<ByteBuffer> variables)
+    private IFilter makeFilter(List<ByteBuffer> variables)
     throws InvalidRequestException
     {
-        SlicePredicate thriftSlicePredicate = new SlicePredicate();
-
         if (isColumnRange())
         {
-            SliceRange sliceRange = new SliceRange();
-            sliceRange.start = getRequestedBound(isReversed ? Bound.END : Bound.START, variables);
-            sliceRange.finish = getRequestedBound(isReversed ? Bound.START : Bound.END, variables);
-            sliceRange.reversed = isReversed;
-            sliceRange.count = -1; // We use this for range slices, where the count is ignored in favor of the global column count
-            thriftSlicePredicate.slice_range = sliceRange;
+            return new SliceQueryFilter(getRequestedBound(isReversed ? Bound.END : Bound.START, variables),
+                                        getRequestedBound(isReversed ? Bound.START : Bound.END, variables),
+                                        isReversed,
+                                        -1); // We use this for range slices, where the count is ignored in favor of the global column count
         }
         else
         {
-            thriftSlicePredicate.column_names = getRequestedColumns(variables);
+            return new NamesQueryFilter(getRequestedColumns(variables));
         }
-        return thriftSlicePredicate;
     }
 
     private int getLimit()
@@ -432,7 +419,7 @@ public class SelectStatement implements CQLStatement
         return selectedNames.isEmpty();
     }
 
-    private List<ByteBuffer> getRequestedColumns(List<ByteBuffer> variables) throws InvalidRequestException
+    private SortedSet<ByteBuffer> getRequestedColumns(List<ByteBuffer> variables) throws InvalidRequestException
     {
         assert !isColumnRange();
 
@@ -443,7 +430,7 @@ public class SelectStatement implements CQLStatement
             if (r.eqValues.size() > 1)
             {
                 // We have a IN. We only support this for the last column, so just create all columns and return.
-                List<ByteBuffer> columns = new ArrayList<ByteBuffer>(r.eqValues.size());
+                SortedSet<ByteBuffer> columns = new TreeSet<ByteBuffer>(cfDef.cfm.comparator);
                 Iterator<Term> iter = r.eqValues.iterator();
                 while (iter.hasNext())
                 {
@@ -462,7 +449,7 @@ public class SelectStatement implements CQLStatement
 
         if (cfDef.isCompact)
         {
-            return Collections.singletonList(builder.build());
+            return FBUtilities.singleton(builder.build());
         }
         else
         {
@@ -471,7 +458,7 @@ public class SelectStatement implements CQLStatement
             // Note that when we allow IS NOT NULL in queries and if all
             // selected name are request 'not null', we will allow to only
             // query those.
-            List<ByteBuffer> columns = new ArrayList<ByteBuffer>(cfDef.columns.size());
+            SortedSet<ByteBuffer> columns = new TreeSet<ByteBuffer>(cfDef.cfm.comparator);
             Iterator<ColumnIdentifier> iter = cfDef.metadata.keySet().iterator();
             while (iter.hasNext())
             {
@@ -542,21 +529,24 @@ public class SelectStatement implements CQLStatement
             {
                 for (Bound b : Bound.values())
                 {
-                    ByteBuffer value = restriction.bound(b).getByteBuffer(name.type, variables);
-                    expressions.add(new IndexExpression(name.name.key, restriction.getIndexOperator(b), value));
+                    if (restriction.bound(b) != null)
+                    {
+                        ByteBuffer value = restriction.bound(b).getByteBuffer(name.type, variables);
+                        expressions.add(new IndexExpression(name.name.key, restriction.getIndexOperator(b), value));
+                    }
                 }
             }
         }
         return expressions;
     }
 
-    private List<Pair<CFDefinition.Name, ColumnIdentifier>> getExpandedSelection()
+    private List<Pair<CFDefinition.Name, Selector>> getExpandedSelection()
     {
         if (selectedNames.isEmpty())
         {
-            List<Pair<CFDefinition.Name, ColumnIdentifier>> selection = new ArrayList<Pair<CFDefinition.Name, ColumnIdentifier>>();
+            List<Pair<CFDefinition.Name, Selector>> selection = new ArrayList<Pair<CFDefinition.Name, Selector>>();
             for (CFDefinition.Name name : cfDef)
-                selection.add(Pair.create(name, name.name));
+                selection.add(Pair.<CFDefinition.Name, Selector>create(name, name.name));
             return selection;
         }
         else
@@ -572,11 +562,61 @@ public class SelectStatement implements CQLStatement
              : c.value();
     }
 
-    private void addToSchema(CqlMetadata schema, Pair<CFDefinition.Name, ColumnIdentifier> p)
+    private Column makeReturnColumn(Selector s, IColumn c)
     {
-        ByteBuffer nameAsRequested = p.right.key;
-        schema.name_types.put(nameAsRequested, TypeParser.getShortName(cfDef.getNameComparatorForResultSet(p.left)));
-        schema.value_types.put(nameAsRequested, TypeParser.getShortName(p.left.type));
+        Column cqlCol;
+        if (s.hasFunction())
+        {
+            cqlCol = new Column(ByteBufferUtil.bytes(s.toString()));
+            if (c == null || c.isMarkedForDelete())
+                return cqlCol;
+
+            switch (s.function())
+            {
+                case WRITE_TIME:
+                    cqlCol.setValue(ByteBufferUtil.bytes(c.timestamp()));
+                    break;
+                case TTL:
+                    if (c instanceof ExpiringColumn)
+                    {
+                        int ttl = ((ExpiringColumn)c).getLocalDeletionTime() - (int) (System.currentTimeMillis() / 1000);
+                        cqlCol.setValue(ByteBufferUtil.bytes(ttl));
+                    }
+                    break;
+            }
+        }
+        else
+        {
+            cqlCol = new Column(s.id().key);
+            if (c == null || c.isMarkedForDelete())
+                return cqlCol;
+            cqlCol.setValue(value(c)).setTimestamp(c.timestamp());
+        }
+        return cqlCol;
+    }
+
+    private void addToSchema(CqlMetadata schema, Pair<CFDefinition.Name, Selector> p)
+    {
+        if (p.right.hasFunction())
+        {
+            ByteBuffer nameAsRequested = ByteBufferUtil.bytes(p.right.toString());
+            schema.name_types.put(nameAsRequested, TypeParser.getShortName(cfDef.definitionType));
+            switch (p.right.function())
+            {
+                case WRITE_TIME:
+                    schema.value_types.put(nameAsRequested, TypeParser.getShortName(LongType.instance));
+                    break;
+                case TTL:
+                    schema.value_types.put(nameAsRequested, TypeParser.getShortName(Int32Type.instance));
+                    break;
+            }
+        }
+        else
+        {
+            ByteBuffer nameAsRequested = p.right.id().key;
+            schema.name_types.put(nameAsRequested, TypeParser.getShortName(cfDef.getNameComparatorForResultSet(p.left)));
+            schema.value_types.put(nameAsRequested, TypeParser.getShortName(p.left.type));
+        }
     }
 
     private Iterable<IColumn> columnsInOrder(final ColumnFamily cf, final List<ByteBuffer> variables) throws InvalidRequestException
@@ -622,11 +662,11 @@ public class SelectStatement implements CQLStatement
     private List<CqlRow> process(List<Row> rows, CqlMetadata schema, List<ByteBuffer> variables) throws InvalidRequestException
     {
         List<CqlRow> cqlRows = new ArrayList<CqlRow>();
-        List<Pair<CFDefinition.Name, ColumnIdentifier>> selection = getExpandedSelection();
+        List<Pair<CFDefinition.Name, Selector>> selection = getExpandedSelection();
         List<Column> thriftColumns = null;
 
         // Add schema only once
-        for (Pair<CFDefinition.Name, ColumnIdentifier> p : selection)
+        for (Pair<CFDefinition.Name, Selector> p : selection)
             addToSchema(schema, p);
 
         for (org.apache.cassandra.db.Row row : rows)
@@ -661,18 +701,21 @@ public class SelectStatement implements CQLStatement
                     }
 
                     // Respect selection order
-                    for (Pair<CFDefinition.Name, ColumnIdentifier> p : selection)
+                    for (Pair<CFDefinition.Name, Selector> p : selection)
                     {
                         CFDefinition.Name name = p.left;
-                        ByteBuffer nameAsRequested = p.right.key;
+                        Selector selector = p.right;
 
-                        Column col = new Column(nameAsRequested);
+                        addToSchema(schema, p);
+                        Column col;
                         switch (name.kind)
                         {
                             case KEY_ALIAS:
+                                col = new Column(selector.id().key);
                                 col.setValue(row.key.key).setTimestamp(-1L);
                                 break;
                             case COLUMN_ALIAS:
+                                col = new Column(selector.id().key);
                                 col.setTimestamp(c.timestamp());
                                 if (cfDef.isComposite)
                                 {
@@ -687,10 +730,12 @@ public class SelectStatement implements CQLStatement
                                 }
                                 break;
                             case VALUE_ALIAS:
-                                col.setValue(value(c)).setTimestamp(c.timestamp());
+                                col = makeReturnColumn(selector, c);
                                 break;
                             case COLUMN_METADATA:
                                 // This should not happen for compact CF
+                                throw new AssertionError();
+                            default:
                                 throw new AssertionError();
                         }
                         thriftColumns.add(col);
@@ -736,22 +781,19 @@ public class SelectStatement implements CQLStatement
                 thriftColumns = new ArrayList<Column>(selection.size());
 
                 // Respect selection order
-                for (Pair<CFDefinition.Name, ColumnIdentifier> p : selection)
+                for (Pair<CFDefinition.Name, Selector> p : selection)
                 {
                     CFDefinition.Name name = p.left;
-                    ByteBuffer nameAsRequested = p.right.key;
+                    Selector selector = p.right;
 
                     if (name.kind == CFDefinition.Name.Kind.KEY_ALIAS)
                     {
-                        thriftColumns.add(new Column(nameAsRequested).setValue(row.key.key).setTimestamp(-1L));
+                        thriftColumns.add(new Column(selector.id().key).setValue(row.key.key).setTimestamp(-1L));
                         continue;
                     }
 
                     IColumn c = row.cf.getColumn(name.name.key);
-                    Column col = new Column(name.name.key);
-                    if (c != null && !c.isMarkedForDelete())
-                        col.setValue(value(c)).setTimestamp(c.timestamp());
-                    thriftColumns.add(col);
+                    thriftColumns.add(makeReturnColumn(selector, c));
                 }
                 cqlRows.add(new CqlRow(row.key.key, thriftColumns));
             }
@@ -789,23 +831,25 @@ public class SelectStatement implements CQLStatement
         return true;
     }
 
-    private CqlRow handleGroup(List<Pair<CFDefinition.Name, ColumnIdentifier>> selection, ByteBuffer key, ByteBuffer[] components, Map<ByteBuffer, IColumn> columns, CqlMetadata schema)
+    private CqlRow handleGroup(List<Pair<CFDefinition.Name, Selector>> selection, ByteBuffer key, ByteBuffer[] components, Map<ByteBuffer, IColumn> columns, CqlMetadata schema)
     {
         List<Column> thriftColumns = new ArrayList<Column>(selection.size());
 
         // Respect requested order
-        for (Pair<CFDefinition.Name, ColumnIdentifier> p : selection)
+        for (Pair<CFDefinition.Name, Selector> p : selection)
         {
             CFDefinition.Name name = p.left;
-            ByteBuffer nameAsRequested = p.right.key;
+            Selector selector = p.right;
 
-            Column col = new Column(nameAsRequested);
+            Column col;
             switch (name.kind)
             {
                 case KEY_ALIAS:
+                    col = new Column(selector.id().key);
                     col.setValue(key).setTimestamp(-1L);
                     break;
                 case COLUMN_ALIAS:
+                    col = new Column(selector.id().key);
                     col.setValue(components[name.position]);
                     col.setTimestamp(-1L);
                     break;
@@ -814,10 +858,10 @@ public class SelectStatement implements CQLStatement
                     throw new AssertionError();
                 case COLUMN_METADATA:
                     IColumn c = columns.get(name.name.key);
-                    // We already have excluded deleted columns
-                    if (c != null)
-                        col.setValue(value(c)).setTimestamp(c.timestamp());
+                    col = makeReturnColumn(selector, c);
                     break;
+                default:
+                    throw new AssertionError();
             }
             thriftColumns.add(col);
         }
@@ -827,10 +871,10 @@ public class SelectStatement implements CQLStatement
     public static class RawStatement extends CFStatement
     {
         private final Parameters parameters;
-        private final List<ColumnIdentifier> selectClause;
+        private final List<Selector> selectClause;
         private final List<Relation> whereClause;
 
-        public RawStatement(CFName cfName, Parameters parameters, List<ColumnIdentifier> selectClause, List<Relation> whereClause)
+        public RawStatement(CFName cfName, Parameters parameters, List<Selector> selectClause, List<Relation> whereClause)
         {
             super(cfName);
             this.parameters = parameters;
@@ -858,12 +902,14 @@ public class SelectStatement implements CQLStatement
             }
             else
             {
-                for (ColumnIdentifier t : selectClause)
+                for (Selector t : selectClause)
                 {
-                    CFDefinition.Name name = cfDef.get(t);
+                    CFDefinition.Name name = cfDef.get(t.id());
                     if (name == null)
-                        throw new InvalidRequestException(String.format("Undefined name %s in selection clause", t));
-                    // Keeping the case (as in 'case sensitive') of the input name for the resultSet
+                        throw new InvalidRequestException(String.format("Undefined name %s in selection clause", t.id()));
+                    if (t.hasFunction() && name.kind != CFDefinition.Name.Kind.COLUMN_METADATA && name.kind != CFDefinition.Name.Kind.VALUE_ALIAS)
+                        throw new InvalidRequestException(String.format("Cannot use function %s on PRIMARY KEY part %s", t.function(), name));
+
                     stmt.selectedNames.add(Pair.create(name, t));
                 }
             }
@@ -1019,7 +1065,7 @@ public class SelectStatement implements CQLStatement
                 // TODO: we could allow ordering for IN queries, as we can do the
                 // sorting post-query easily, but we will have to add it
                 if (stmt.keyRestriction == null || !stmt.keyRestriction.isEquality() || stmt.keyRestriction.eqValues.size() != 1)
-                    throw new InvalidRequestException("Ordering is only supported is the first part of the PRIMARY KEY is restricted by an Equal or a IN");
+                    throw new InvalidRequestException("Ordering is only supported if the first part of the PRIMARY KEY is restricted by an Equal");
             }
 
             // If this is a query on tokens, it's necessary a range query (there can be more than one key per token), so reject IN queries (as we don't know how to do them)

@@ -30,6 +30,7 @@ import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.KSMetaData;
 import org.apache.cassandra.config.Schema;
 import org.apache.cassandra.db.filter.QueryPath;
+import org.apache.cassandra.db.marshal.UUIDType;
 import org.apache.cassandra.io.IColumnSerializer;
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.util.FastByteArrayInputStream;
@@ -50,13 +51,13 @@ public class RowMutation implements IMutation
     private final String table;
     private final ByteBuffer key;
     // map of column family id to mutations for that column family.
-    protected final Map<Integer, ColumnFamily> modifications;
+    protected Map<UUID, ColumnFamily> modifications = new HashMap<UUID, ColumnFamily>();
 
     private final Map<Integer, byte[]> preserializedBuffers = new HashMap<Integer, byte[]>();
 
     public RowMutation(String table, ByteBuffer key)
     {
-        this(table, key, new HashMap<Integer, ColumnFamily>());
+        this(table, key, new HashMap<UUID, ColumnFamily>());
     }
 
     public RowMutation(String table, Row row)
@@ -65,7 +66,7 @@ public class RowMutation implements IMutation
         add(row.cf);
     }
 
-    protected RowMutation(String table, ByteBuffer key, Map<Integer, ColumnFamily> modifications)
+    protected RowMutation(String table, ByteBuffer key, Map<UUID, ColumnFamily> modifications)
     {
         this.table = table;
         this.key = key;
@@ -77,7 +78,7 @@ public class RowMutation implements IMutation
         return table;
     }
 
-    public Collection<Integer> getColumnFamilyIds()
+    public Collection<UUID> getColumnFamilyIds()
     {
         return modifications.keySet();
     }
@@ -92,32 +93,19 @@ public class RowMutation implements IMutation
         return modifications.values();
     }
 
-    public ColumnFamily getColumnFamily(Integer cfId)
+    public ColumnFamily getColumnFamily(UUID cfId)
     {
         return modifications.get(cfId);
     }
 
     /**
      * Returns mutation representing a Hints to be sent to <code>address</code>
-     * as soon as it becomes available.
-     * The format is the following:
-     *
-     * HintsColumnFamily: {        // cf
-     *   <dest token>: {           // key
-     *     <uuid>: {               // super-column
-     *       table: <table>        // columns
-     *       key: <key>
-     *       mutation: <mutation>
-     *       version: <version>
-     *     }
-     *   }
-     * }
-     *
+     * as soon as it becomes available.  See HintedHandoffManager for more details.
      */
-    public static RowMutation hintFor(RowMutation mutation, ByteBuffer token) throws IOException
+    public static RowMutation hintFor(RowMutation mutation, UUID targetId) throws IOException
     {
-        RowMutation rm = new RowMutation(Table.SYSTEM_TABLE, token);
-        ByteBuffer hintId = ByteBuffer.wrap(UUIDGen.getTimeUUIDBytes());
+        RowMutation rm = new RowMutation(Table.SYSTEM_TABLE, UUIDType.instance.decompose(targetId));
+        UUID hintId = UUIDGen.makeType1UUIDFromHost(FBUtilities.getBroadcastAddress());
 
         // determine the TTL for the RowMutation
         // this is set at the smallest GCGraceSeconds for any of the CFs in the RM
@@ -126,21 +114,9 @@ public class RowMutation implements IMutation
         for (ColumnFamily cf : mutation.getColumnFamilies())
             ttl = Math.min(ttl, cf.metadata().getGcGraceSeconds());
 
-        // serialized RowMutation
-        QueryPath path = new QueryPath(HintedHandOffManager.HINTS_CF, hintId, ByteBufferUtil.bytes("mutation"));
+        // serialize the hint with id and version as a composite column name
+        QueryPath path = new QueryPath(SystemTable.HINTS_CF, null, HintedHandOffManager.comparator.decompose(hintId, MessagingService.current_version));
         rm.add(path, ByteBuffer.wrap(mutation.getSerializedBuffer(MessagingService.current_version)), System.currentTimeMillis(), ttl);
-
-        // serialization version
-        path = new QueryPath(HintedHandOffManager.HINTS_CF, hintId, ByteBufferUtil.bytes("version"));
-        rm.add(path, ByteBufferUtil.bytes(MessagingService.current_version), System.currentTimeMillis(), ttl);
-
-        // table
-        path = new QueryPath(HintedHandOffManager.HINTS_CF, hintId, ByteBufferUtil.bytes("table"));
-        rm.add(path, ByteBufferUtil.bytes(mutation.getTable()), System.currentTimeMillis(), ttl);
-
-        // key
-        path = new QueryPath(HintedHandOffManager.HINTS_CF, hintId, ByteBufferUtil.bytes("key"));
-        rm.add(path, mutation.key(), System.currentTimeMillis(), ttl);
 
         return rm;
     }
@@ -199,8 +175,9 @@ public class RowMutation implements IMutation
      */
     public void add(QueryPath path, ByteBuffer value, long timestamp, int timeToLive)
     {
-        Integer id = Schema.instance.getId(table, path.columnFamilyName);
+        UUID id = Schema.instance.getId(table, path.columnFamilyName);
         ColumnFamily columnFamily = modifications.get(id);
+
         if (columnFamily == null)
         {
             columnFamily = ColumnFamily.create(table, path.columnFamilyName);
@@ -211,8 +188,9 @@ public class RowMutation implements IMutation
 
     public void addCounter(QueryPath path, long value)
     {
-        Integer id = Schema.instance.getId(table, path.columnFamilyName);
+        UUID id = Schema.instance.getId(table, path.columnFamilyName);
         ColumnFamily columnFamily = modifications.get(id);
+
         if (columnFamily == null)
         {
             columnFamily = ColumnFamily.create(table, path.columnFamilyName);
@@ -228,7 +206,7 @@ public class RowMutation implements IMutation
 
     public void delete(QueryPath path, long timestamp)
     {
-        Integer id = Schema.instance.getId(table, path.columnFamilyName);
+        UUID id = Schema.instance.getId(table, path.columnFamilyName);
 
         int localDeleteTime = (int) (System.currentTimeMillis() / 1000);
 
@@ -264,7 +242,7 @@ public class RowMutation implements IMutation
         if (!table.equals(rm.table) || !key.equals(rm.key))
             throw new IllegalArgumentException();
 
-        for (Map.Entry<Integer, ColumnFamily> entry : rm.modifications.entrySet())
+        for (Map.Entry<UUID, ColumnFamily> entry : rm.modifications.entrySet())
         {
             // It's slighty faster to assume the key wasn't present and fix if
             // not in the case where it wasn't there indeed.
@@ -325,7 +303,7 @@ public class RowMutation implements IMutation
         if (shallow)
         {
             List<String> cfnames = new ArrayList<String>(modifications.size());
-            for (Integer cfid : modifications.keySet())
+            for (UUID cfid : modifications.keySet())
             {
                 CFMetaData cfm = Schema.instance.getCFMetaData(cfid);
                 cfnames.add(cfm == null ? "-dropped-" : cfm.cfName);
@@ -385,7 +363,7 @@ public class RowMutation implements IMutation
     {
         RowMutation rm = serializer.deserialize(new DataInputStream(new FastByteArrayInputStream(raw)), version);
         boolean hasCounters = false;
-        for (Map.Entry<Integer, ColumnFamily> entry : rm.modifications.entrySet())
+        for (Map.Entry<UUID, ColumnFamily> entry : rm.modifications.entrySet())
         {
             if (entry.getValue().metadata().getDefaultValidator().isCommutative())
             {
@@ -411,9 +389,10 @@ public class RowMutation implements IMutation
             int size = rm.modifications.size();
             dos.writeInt(size);
             assert size >= 0;
-            for (Map.Entry<Integer,ColumnFamily> entry : rm.modifications.entrySet())
+            for (Map.Entry<UUID, ColumnFamily> entry : rm.modifications.entrySet())
             {
-                dos.writeInt(entry.getKey());
+                if (version < MessagingService.VERSION_12)
+                    ColumnFamily.serializer.serializeCfId(entry.getKey(), dos, version);
                 ColumnFamily.serializer.serialize(entry.getValue(), dos, version);
             }
         }
@@ -422,13 +401,17 @@ public class RowMutation implements IMutation
         {
             String table = dis.readUTF();
             ByteBuffer key = ByteBufferUtil.readWithShortLength(dis);
-            Map<Integer, ColumnFamily> modifications = new HashMap<Integer, ColumnFamily>();
+            Map<UUID, ColumnFamily> modifications = new HashMap<UUID, ColumnFamily>();
             int size = dis.readInt();
             for (int i = 0; i < size; ++i)
             {
-                Integer cfid = Integer.valueOf(dis.readInt());
+                // We used to uselessly write the cf id here
+                if (version < MessagingService.VERSION_12)
+                    ColumnFamily.serializer.deserializeCfId(dis, version);
                 ColumnFamily cf = ColumnFamily.serializer.deserialize(dis, flag, TreeMapBackedSortedColumns.factory(), version);
-                modifications.put(cfid, cf);
+                // We don't allow RowMutation with null column family, so we should never get null back.
+                assert cf != null;
+                modifications.put(cf.id(), cf);
             }
             return new RowMutation(table, key, modifications);
         }
@@ -446,9 +429,10 @@ public class RowMutation implements IMutation
             size += sizes.sizeof((short) keySize) + keySize;
 
             size += sizes.sizeof(rm.modifications.size());
-            for (Map.Entry<Integer,ColumnFamily> entry : rm.modifications.entrySet())
+            for (Map.Entry<UUID,ColumnFamily> entry : rm.modifications.entrySet())
             {
-                size += sizes.sizeof(entry.getKey());
+                if (version < MessagingService.VERSION_12)
+                    size += ColumnFamily.serializer.cfIdSerializedSize(entry.getValue().id(), sizes, version);
                 size += ColumnFamily.serializer.serializedSize(entry.getValue(), TypeSizes.NATIVE, version);
             }
 

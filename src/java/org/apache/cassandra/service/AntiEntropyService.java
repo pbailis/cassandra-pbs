@@ -162,18 +162,6 @@ public class AntiEntropyService
 
         Set<InetAddress> neighbors = new HashSet<InetAddress>(replicaSets.get(rangeSuperSet));
         neighbors.remove(FBUtilities.getBroadcastAddress());
-        // Excluding all node with version <= 0.7 since they don't know how to
-        // create a correct merkle tree (they build it over the full range)
-        Iterator<InetAddress> iter = neighbors.iterator();
-        while (iter.hasNext())
-        {
-            InetAddress endpoint = iter.next();
-            if (Gossiper.instance.getVersion(endpoint) <= MessagingService.VERSION_07)
-            {
-                logger.info("Excluding " + endpoint + " from repair because it is on version 0.7 or sooner. You should consider updating this node before running repair again.");
-                iter.remove();
-            }
-        }
         return neighbors;
     }
 
@@ -648,7 +636,7 @@ public class AntiEntropyService
                     return;
                 }
 
-                if (Gossiper.instance.getVersion(endpoint) < MessagingService.VERSION_11 && isSequential)
+                if (MessagingService.instance().getVersion(endpoint) < MessagingService.VERSION_11 && isSequential)
                 {
                     logger.info(String.format("[repair #%s] Cannot repair using snapshots as node %s is pre-1.1", getName(), endpoint));
                     return;
@@ -991,7 +979,7 @@ public class AntiEntropyService
                 StreamingRepairTask task = StreamingRepairTask.create(r1.endpoint, r2.endpoint, tablename, cfname, differences, callback);
 
                 // Pre 1.0, nodes don't know how to handle forwarded streaming task so don't bother
-                if (task.isLocalTask() || Gossiper.instance.getVersion(task.dst) >= MessagingService.VERSION_10)
+                if (task.isLocalTask() || MessagingService.instance().getVersion(task.dst) >= MessagingService.VERSION_10)
                     task.run();
             }
 

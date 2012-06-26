@@ -19,7 +19,9 @@ package org.apache.cassandra.net;
 
 import java.io.IOException;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.nio.channels.SocketChannel;
 
 import org.apache.cassandra.concurrent.Stage;
 import org.apache.cassandra.config.Config;
@@ -59,10 +61,19 @@ public class OutboundTcpConnectionPool
                : cmdCon;
     }
 
-    synchronized void reset()
+    void reset()
     {
-        for (OutboundTcpConnection con : new OutboundTcpConnection[] { cmdCon, ackCon })
-            con.closeSocket();
+        for (OutboundTcpConnection conn : new OutboundTcpConnection[] { cmdCon, ackCon })
+            conn.closeSocket();
+    }
+
+    public void resetToNewerVersion(int version)
+    {
+        for (OutboundTcpConnection conn : new OutboundTcpConnection[] { cmdCon, ackCon })
+        {
+            if (version > conn.getTargetVersion())
+                conn.softCloseSocket();
+        }
     }
 
     /**
@@ -73,8 +84,8 @@ public class OutboundTcpConnectionPool
     public void reset(InetAddress remoteEP)
     {
         resetedEndpoint = remoteEP;
-        for (OutboundTcpConnection con : new OutboundTcpConnection[] { cmdCon, ackCon })
-            con.softCloseSocket();
+        for (OutboundTcpConnection conn : new OutboundTcpConnection[] { cmdCon, ackCon })
+            conn.softCloseSocket();
     }
 
     public Socket newSocket() throws IOException
@@ -89,10 +100,10 @@ public class OutboundTcpConnectionPool
         }
         else
         {
+            Socket socket = SocketChannel.open(new InetSocketAddress(endPoint(), DatabaseDescriptor.getStoragePort())).socket();
             if (Config.getOutboundBindAny())
-                return new Socket(endPoint(), DatabaseDescriptor.getStoragePort());
-            else
-                return new Socket(endPoint(), DatabaseDescriptor.getStoragePort(), FBUtilities.getLocalAddress(), 0);
+                socket.bind(new InetSocketAddress(FBUtilities.getLocalAddress(), 0));
+            return socket;
         }
     }
 

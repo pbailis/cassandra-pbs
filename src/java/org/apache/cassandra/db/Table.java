@@ -20,15 +20,7 @@ package org.apache.cassandra.db;
 import java.io.IOError;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.SortedSet;
-import java.util.TreeSet;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -87,7 +79,7 @@ public class Table
     /* Table name. */
     public final String name;
     /* ColumnFamilyStore per column family */
-    private final Map<Integer, ColumnFamilyStore> columnFamilyStores = new ConcurrentHashMap<Integer, ColumnFamilyStore>();
+    private final Map<UUID, ColumnFamilyStore> columnFamilyStores = new ConcurrentHashMap<UUID, ColumnFamilyStore>();
     private final Object[] indexLocks;
     private volatile AbstractReplicationStrategy replicationStrategy;
 
@@ -148,48 +140,18 @@ public class Table
 
     public ColumnFamilyStore getColumnFamilyStore(String cfName)
     {
-        Integer id = Schema.instance.getId(name, cfName);
+        UUID id = Schema.instance.getId(name, cfName);
         if (id == null)
             throw new IllegalArgumentException(String.format("Unknown table/cf pair (%s.%s)", name, cfName));
         return getColumnFamilyStore(id);
     }
 
-    public ColumnFamilyStore getColumnFamilyStore(Integer id)
+    public ColumnFamilyStore getColumnFamilyStore(UUID id)
     {
         ColumnFamilyStore cfs = columnFamilyStores.get(id);
         if (cfs == null)
             throw new IllegalArgumentException("Unknown CF " + id);
         return cfs;
-    }
-
-    /**
-     * Do a cleanup of keys that do not belong locally.
-     */
-    public void forceCleanup(NodeId.OneShotRenewer renewer) throws IOException, ExecutionException, InterruptedException
-    {
-        if (name.equals(SYSTEM_TABLE))
-            throw new UnsupportedOperationException("Cleanup of the system table is neither necessary nor wise");
-
-        // Sort the column families in order of SSTable size, so cleanup of smaller CFs
-        // can free up space for larger ones
-        List<ColumnFamilyStore> sortedColumnFamilies = new ArrayList<ColumnFamilyStore>(columnFamilyStores.values());
-        Collections.sort(sortedColumnFamilies, new Comparator<ColumnFamilyStore>()
-        {
-            // Compare first on size and, if equal, sort by name (arbitrary & deterministic).
-            public int compare(ColumnFamilyStore cf1, ColumnFamilyStore cf2)
-            {
-                long diff = (cf1.getTotalDiskSpaceUsed() - cf2.getTotalDiskSpaceUsed());
-                if (diff > 0)
-                    return 1;
-                if (diff < 0)
-                    return -1;
-                return cf1.columnFamily.compareTo(cf2.columnFamily);
-            }
-        });
-
-        // Cleanup in sorted order to free up space for the larger ones
-        for (ColumnFamilyStore cfs : sortedColumnFamilies)
-            cfs.forceCleanup(renewer);
     }
 
     /**
@@ -313,7 +275,7 @@ public class Table
     }
 
     // best invoked on the compaction mananger.
-    public void dropCf(Integer cfId) throws IOException
+    public void dropCf(UUID cfId) throws IOException
     {
         assert columnFamilyStores.containsKey(cfId);
         ColumnFamilyStore cfs = columnFamilyStores.remove(cfId);
@@ -342,7 +304,7 @@ public class Table
     }
 
     /** adds a cf to internal structures, ends up creating disk files). */
-    public void initCf(Integer cfId, String cfName)
+    public void initCf(UUID cfId, String cfName)
     {
         if (columnFamilyStores.containsKey(cfId))
         {
@@ -380,10 +342,14 @@ public class Table
     }
 
     /**
-     * This method adds the row to the Commit Log associated with this table.
-     * Once this happens the data associated with the individual column families
-     * is also written to the column family store's memtable.
-    */
+     * This method appends a row to the global CommitLog, then updates memtables and indexes.
+     *
+     * @param mutation the row to write.  Must not be modified after calling apply, since commitlog append
+     *                 may happen concurrently, depending on the CL Executor type.
+     * @param writeCommitLog false to disable commitlog append entirely
+     * @param updateIndexes false to disable index updates (used by CollationController "defragmenting")
+     * @throws IOException
+     */
     public void apply(RowMutation mutation, boolean writeCommitLog, boolean updateIndexes) throws IOException
     {
         if (logger.isDebugEnabled())
@@ -414,7 +380,7 @@ public class Table
                         if (cf.getColumnNames().contains(column) || cf.isMarkedForDelete())
                         {
                             if (mutatedIndexedColumns == null)
-                                mutatedIndexedColumns = new TreeSet<ByteBuffer>();
+                                mutatedIndexedColumns = new TreeSet<ByteBuffer>(cf.getComparator());
                             mutatedIndexedColumns.add(column);
                             if (logger.isDebugEnabled())
                             {
@@ -556,7 +522,7 @@ public class Table
     public List<Future<?>> flush() throws IOException
     {
         List<Future<?>> futures = new ArrayList<Future<?>>();
-        for (Integer cfId : columnFamilyStores.keySet())
+        for (UUID cfId : columnFamilyStores.keySet())
         {
             Future<?> future = columnFamilyStores.get(cfId).forceFlush();
             if (future != null)

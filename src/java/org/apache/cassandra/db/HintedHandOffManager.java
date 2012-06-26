@@ -33,12 +33,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.concurrent.JMXEnabledThreadPoolExecutor;
+import org.apache.cassandra.concurrent.NamedThreadFactory;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.compaction.CompactionManager;
-import org.apache.cassandra.db.filter.IFilter;
-import org.apache.cassandra.db.filter.NamesQueryFilter;
-import org.apache.cassandra.db.filter.QueryFilter;
-import org.apache.cassandra.db.filter.QueryPath;
+import org.apache.cassandra.db.filter.*;
+import org.apache.cassandra.db.marshal.AbstractType;
+import org.apache.cassandra.db.marshal.CompositeType;
+import org.apache.cassandra.db.marshal.Int32Type;
+import org.apache.cassandra.db.marshal.UUIDType;
 import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
@@ -47,11 +49,13 @@ import org.apache.cassandra.gms.FailureDetector;
 import org.apache.cassandra.gms.Gossiper;
 import org.apache.cassandra.io.sstable.Descriptor;
 import org.apache.cassandra.io.sstable.SSTable;
+import org.apache.cassandra.net.MessageOut;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.service.*;
 import org.apache.cassandra.thrift.*;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.FBUtilities;
+import org.apache.cassandra.utils.Throttle;
 import org.apache.cassandra.utils.UUIDGen;
 import org.apache.cassandra.utils.WrappedRunnable;
 import org.cliffc.high_scale_lib.NonBlockingHashSet;
@@ -59,19 +63,18 @@ import org.cliffc.high_scale_lib.NonBlockingHashSet;
 
 
 /**
- * For each endpoint for which we have hints, there is a row in the system hints CF.
- * The key for this row is ByteBuffer.wrap(string), i.e. "127.0.0.1".
- * (We have to use String keys for compatibility with OPP.)
- * SuperColumns in these rows are the mutations to replay, with uuid names:
+ * The hint schema looks like this:
  *
- *  <dest token>: {           // key
- *    <uuid>: {               // supercolumn
- *      mutation: <mutation>  // subcolumn
- *      version: <mutation serialization version>
- *      table: <table of hinted mutation>
- *      key: <key of hinted mutation>
- *    }
- *  }
+ * CREATE TABLE hints (
+ *   target_id uuid,
+ *   hint_id timeuuid,
+ *   message_version int,
+ *   mutation blob,
+ *   PRIMARY KEY (target_id, hint_id, message_version)
+ * ) WITH COMPACT STORAGE;
+ *
+ * Thus, for each node in the cluster we treat its uuid as the partition key; each hint is a logical row
+ * (physical composite column) containing the mutation to replay and associated metadata.
  *
  * When FailureDetector signals that a node that was down is back up, we page through
  * the hinted mutations and send them over one at a time, waiting for
@@ -84,20 +87,20 @@ import org.cliffc.high_scale_lib.NonBlockingHashSet;
 public class HintedHandOffManager implements HintedHandOffManagerMBean
 {
     public static final HintedHandOffManager instance = new HintedHandOffManager();
-    public static final String HINTS_CF = "HintsColumnFamily";
 
     private static final Logger logger = LoggerFactory.getLogger(HintedHandOffManager.class);
     private static final int PAGE_SIZE = 128;
     private static final int LARGE_NUMBER = 65536; // 64k nodes ought to be enough for anybody.
 
-    // in 0.8, subcolumns were KS-CF bytestrings, and the data was stored in the "normal" storage there.
-    // (so replay always consisted of sending an entire row,
-    // no matter how little was part of the mutation that created the hint.)
-    private static final String SEPARATOR_08 = "-";
+    static final CompositeType comparator = CompositeType.getInstance(Arrays.<AbstractType<?>>asList(UUIDType.instance, Int32Type.instance));
 
     private final NonBlockingHashSet<InetAddress> queuedDeliveries = new NonBlockingHashSet<InetAddress>();
 
-    private final ExecutorService executor = new JMXEnabledThreadPoolExecutor("HintedHandoff", Thread.MIN_PRIORITY);
+    private final ThreadPoolExecutor executor = new JMXEnabledThreadPoolExecutor(DatabaseDescriptor.getMaxHintsThread(),
+                                                                                 Integer.MAX_VALUE,
+                                                                                 TimeUnit.SECONDS,
+                                                                                 new LinkedBlockingQueue<Runnable>(),
+                                                                                 new NamedThreadFactory("HintedHandoff", Thread.MIN_PRIORITY), "HintedHandoff");
 
     public void start()
     {
@@ -122,26 +125,17 @@ public class HintedHandOffManager implements HintedHandOffManagerMBean
         StorageService.optionalTasks.scheduleWithFixedDelay(runnable, 10, 10, TimeUnit.MINUTES);
     }
 
-    private static void sendMutation(InetAddress endpoint, RowMutation mutation) throws TimeoutException
+    private static void sendMutation(InetAddress endpoint, MessageOut<?> message) throws TimeoutException
     {
         IWriteResponseHandler responseHandler = WriteResponseHandler.create(endpoint);
-        MessagingService.instance().sendRR(mutation.createMessage(), endpoint, responseHandler);
+        MessagingService.instance().sendRR(message, endpoint, responseHandler);
         responseHandler.get();
-
-        try
-        {
-            Thread.sleep(DatabaseDescriptor.getHintedHandoffThrottleDelay());
-        }
-        catch (InterruptedException e)
-        {
-            throw new AssertionError(e);
-        }
     }
 
-    private static void deleteHint(ByteBuffer tokenBytes, ByteBuffer hintId, long timestamp) throws IOException
+    private static void deleteHint(ByteBuffer tokenBytes, ByteBuffer columnName, long timestamp) throws IOException
     {
         RowMutation rm = new RowMutation(Table.SYSTEM_TABLE, tokenBytes);
-        rm.delete(new QueryPath(HINTS_CF, hintId), timestamp);
+        rm.delete(new QueryPath(SystemTable.HINTS_CF, null, columnName), timestamp);
         rm.applyUnsafe(); // don't bother with commitlog since we're going to flush as soon as we're done with delivery
     }
 
@@ -167,7 +161,7 @@ public class HintedHandOffManager implements HintedHandOffManagerMBean
         UUID hostId = StorageService.instance.getTokenMetadata().getHostId(endpoint);
         ByteBuffer hostIdBytes = ByteBuffer.wrap(UUIDGen.decompose(hostId));
         final RowMutation rm = new RowMutation(Table.SYSTEM_TABLE, hostIdBytes);
-        rm.delete(new QueryPath(HINTS_CF), System.currentTimeMillis());
+        rm.delete(new QueryPath(SystemTable.HINTS_CF), System.currentTimeMillis());
 
         // execute asynchronously to avoid blocking caller (which may be processing gossip)
         Runnable runnable = new Runnable()
@@ -191,7 +185,7 @@ public class HintedHandOffManager implements HintedHandOffManagerMBean
 
     private Future<?> compact() throws ExecutionException, InterruptedException
     {
-        final ColumnFamilyStore hintStore = Table.open(Table.SYSTEM_TABLE).getColumnFamilyStore(HINTS_CF);
+        final ColumnFamilyStore hintStore = Table.open(Table.SYSTEM_TABLE).getColumnFamilyStore(SystemTable.HINTS_CF);
         hintStore.forceBlockingFlush();
         ArrayList<Descriptor> descriptors = new ArrayList<Descriptor>();
         for (SSTable sstable : hintStore.getSSTables())
@@ -263,7 +257,22 @@ public class HintedHandOffManager implements HintedHandOffManagerMBean
 
     private void deliverHintsToEndpointInternal(InetAddress endpoint) throws IOException, DigestMismatchException, InvalidRequestException, InterruptedException
     {
-        ColumnFamilyStore hintStore = Table.open(Table.SYSTEM_TABLE).getColumnFamilyStore(HINTS_CF);
+        long hintSizes = 0;
+        Throttle hintThrottle = new Throttle("HintThrottle", new Throttle.ThroughputFunction()
+        {
+            public int targetThroughput()
+            {
+                if (DatabaseDescriptor.getHintedHandoffThrottleInKB() < 1)
+                    // throttling disabled
+                    return 0;
+                // total throughput
+                int totalBytesPerMS = (DatabaseDescriptor.getHintedHandoffThrottleInKB() * 1024) / 8 / 1000;
+                // per hint throughput (target bytes per MS)
+                return totalBytesPerMS / Math.max(1, executor.getActiveCount());
+            }
+        });
+
+        ColumnFamilyStore hintStore = Table.open(Table.SYSTEM_TABLE).getColumnFamilyStore(SystemTable.HINTS_CF);
         if (hintStore.isEmpty())
             return; // nothing to do, don't confuse users by logging a no-op handoff
 
@@ -311,39 +320,30 @@ public class HintedHandOffManager implements HintedHandOffManagerMBean
         delivery:
         while (true)
         {
-            QueryFilter filter = QueryFilter.getSliceFilter(epkey, new QueryPath(HINTS_CF), startColumn, ByteBufferUtil.EMPTY_BYTE_BUFFER, false, pageSize);
+            QueryFilter filter = QueryFilter.getSliceFilter(epkey, new QueryPath(SystemTable.HINTS_CF), startColumn, ByteBufferUtil.EMPTY_BYTE_BUFFER, false, pageSize);
             ColumnFamily hintsPage = ColumnFamilyStore.removeDeleted(hintStore.getColumnFamily(filter), (int)(System.currentTimeMillis() / 1000));
             if (pagingFinished(hintsPage, startColumn))
                 break;
 
-            page:
             for (IColumn hint : hintsPage.getSortedColumns())
             {
-                startColumn = hint.name();
-                for (IColumn subColumn : hint.getSubColumns())
-                {
-                    // both 0.8 and 1.0 column names are UTF8 strings, so this check is safe
-                    if (ByteBufferUtil.string(subColumn.name()).contains(SEPARATOR_08))
-                    {
-                        logger.debug("0.8-style hint found.  This should have been taken care of by purgeIncompatibleHints");
-                        deleteHint(hostIdBytes, hint.name(), hint.maxTimestamp());
-                        continue page;
-                    }
-                }
+                // Skip tombstones:
+                // if we iterate quickly enough, it's possible that we could request a new page in the same millisecond
+                // in which the local deletion timestamp was generated on the last column in the old page, in which
+                // case the hint will have no columns (since it's deleted) but will still be included in the resultset
+                // since (even with gcgs=0) it's still a "relevant" tombstone.
+                if (!hint.isLive())
+                    continue;
 
-                IColumn versionColumn = hint.getSubColumn(ByteBufferUtil.bytes("version"));
-                IColumn tableColumn = hint.getSubColumn(ByteBufferUtil.bytes("table"));
-                IColumn keyColumn = hint.getSubColumn(ByteBufferUtil.bytes("key"));
-                IColumn mutationColumn = hint.getSubColumn(ByteBufferUtil.bytes("mutation"));
-                assert versionColumn != null;
-                assert tableColumn != null;
-                assert keyColumn != null;
-                assert mutationColumn != null;
-                DataInputStream in = new DataInputStream(ByteBufferUtil.inputStream(mutationColumn.value()));
+                startColumn = hint.name();
+
+                ByteBuffer[] components = comparator.split(hint.name());
+                int version = Int32Type.instance.compose(components[1]);
+                DataInputStream in = new DataInputStream(ByteBufferUtil.inputStream(hint.value()));
                 RowMutation rm;
                 try
                 {
-                    rm = RowMutation.serializer.deserialize(in, ByteBufferUtil.toInt(versionColumn.value()));
+                    rm = RowMutation.serializer.deserialize(in, version);
                 }
                 catch (UnknownColumnFamilyException e)
                 {
@@ -355,7 +355,11 @@ public class HintedHandOffManager implements HintedHandOffManagerMBean
                 {
                     if (rm != null)
                     {
-                        sendMutation(endpoint, rm);
+                        MessageOut<RowMutation> message = rm.createMessage();
+                        sendMutation(endpoint, message);
+                        // throttle for the messages sent.
+                        hintSizes += message.serializedSize(MessagingService.current_version);
+                        hintThrottle.throttle(hintSizes);
                         rowsReplayed++;
                     }
                     deleteHint(hostIdBytes, hint.name(), hint.maxTimestamp());
@@ -392,7 +396,7 @@ public class HintedHandOffManager implements HintedHandOffManagerMBean
         if (logger.isDebugEnabled())
           logger.debug("Started scheduleAllDeliveries");
 
-        ColumnFamilyStore hintStore = Table.open(Table.SYSTEM_TABLE).getColumnFamilyStore(HINTS_CF);
+        ColumnFamilyStore hintStore = Table.open(Table.SYSTEM_TABLE).getColumnFamilyStore(SystemTable.HINTS_CF);
         IPartitioner p = StorageService.getPartitioner();
         RowPosition minPos = p.getMinimumToken().minKeyBound();
         Range<RowPosition> range = new Range<RowPosition>(minPos, minPos, p);
@@ -418,10 +422,10 @@ public class HintedHandOffManager implements HintedHandOffManagerMBean
     */
     public void scheduleHintDelivery(final InetAddress to)
     {
-        logger.debug("deliverHints to {}", to);
-        if (!queuedDeliveries.add(to))
+        // We should not deliver hints to the same host in 2 different threads
+        if (queuedDeliveries.contains(to) || !queuedDeliveries.add(to))
             return;
-
+        logger.debug("Scheduling delivery of Hints to {}", to);
         Runnable r = new WrappedRunnable()
         {
             public void runMayThrow() throws Exception
@@ -464,17 +468,16 @@ public class HintedHandOffManager implements HintedHandOffManagerMBean
         return result;
     }
 
-    private List<Row> getHintsSlice(int column_count)
+    private List<Row> getHintsSlice(int columnCount)
     {
         // ColumnParent for HintsCF...
-        ColumnParent parent = new ColumnParent(HINTS_CF);
+        ColumnParent parent = new ColumnParent(SystemTable.HINTS_CF);
 
         // Get count # of columns...
-        SlicePredicate predicate = new SlicePredicate();
-        SliceRange sliceRange = new SliceRange();
-        sliceRange.setStart(new byte[0]).setFinish(new byte[0]);
-        sliceRange.setCount(column_count);
-        predicate.setSlice_range(sliceRange);
+        SliceQueryFilter predicate = new SliceQueryFilter(ByteBufferUtil.EMPTY_BYTE_BUFFER,
+                                                          ByteBufferUtil.EMPTY_BYTE_BUFFER,
+                                                          false,
+                                                          columnCount);
 
         // From keys "" to ""...
         IPartitioner<?> partitioner = StorageService.getPartitioner();

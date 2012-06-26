@@ -29,8 +29,10 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 import com.google.common.base.Function;
+import com.google.common.base.Functions;
 
 import org.apache.cassandra.utils.ByteBufferUtil;
+import org.apache.cassandra.db.filter.ColumnSlice;
 import org.apache.cassandra.db.marshal.BytesType;
 import org.apache.cassandra.utils.HeapAllocator;
 
@@ -78,7 +80,7 @@ public class ArrayBackedSortedColumnsTest
         for (int i = 0; i < values2.length; ++i)
             map2.addColumn(new Column(ByteBufferUtil.bytes(values2[reversed ? values2.length - 1 - i : i])), HeapAllocator.instance);
 
-        map2.addAll(map, HeapAllocator.instance, new Function<IColumn, IColumn>(){ public IColumn apply(IColumn c) { return c; }; });
+        map2.addAll(map, HeapAllocator.instance, Functions.<IColumn>identity());
 
         Iterator<IColumn> iter = map2.iterator();
         assertEquals("1st column", 1, iter.next().name().getInt(0));
@@ -157,10 +159,10 @@ public class ArrayBackedSortedColumnsTest
         //assertSame(new int[]{ 3, 5, 9 }, map.iterator(ByteBufferUtil.bytes(3)));
         //assertSame(new int[]{ 5, 9 }, map.iterator(ByteBufferUtil.bytes(4)));
 
-        assertSame(new int[]{ 3, 2, 1 }, map.reverseIterator(ByteBufferUtil.bytes(3)));
-        assertSame(new int[]{ 3, 2, 1 }, map.reverseIterator(ByteBufferUtil.bytes(4)));
+        assertSame(new int[]{ 3, 2, 1 }, map.reverseIterator(new ColumnSlice[]{ new ColumnSlice(ByteBufferUtil.bytes(3), ByteBufferUtil.EMPTY_BYTE_BUFFER) }));
+        assertSame(new int[]{ 3, 2, 1 }, map.reverseIterator(new ColumnSlice[]{ new ColumnSlice(ByteBufferUtil.bytes(4), ByteBufferUtil.EMPTY_BYTE_BUFFER) }));
 
-        assertSame(map.iterator(), map.iterator(ByteBufferUtil.EMPTY_BYTE_BUFFER));
+        assertSame(map.iterator(), map.iterator(ColumnSlice.ALL_COLUMNS_ARRAY));
     }
 
     private <T> void assertSame(Collection<T> c1, Collection<T> c2)
@@ -180,8 +182,9 @@ public class ArrayBackedSortedColumnsTest
     {
         for (int name : names)
         {
-            assert iter.hasNext();
-            assert name == ByteBufferUtil.toInt(iter.next().name());
+            assert iter.hasNext() : "Expected " + name + " but no more result";
+            int value = ByteBufferUtil.toInt(iter.next().name());
+            assert name == value : "Expected " + name + " but got " + value;
         }
     }
 }

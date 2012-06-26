@@ -24,7 +24,6 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 
-import org.apache.cassandra.config.ConfigurationException;
 import org.apache.cassandra.db.*;
 import org.apache.cassandra.io.util.*;
 import org.apache.cassandra.net.MessagingService;
@@ -208,7 +207,7 @@ public class CommitLog implements CommitLogMBean
      * @param cfId    the column family ID that was flushed
      * @param context the replay position of the flush
      */
-    public void discardCompletedSegments(final Integer cfId, final ReplayPosition context) throws IOException
+    public void discardCompletedSegments(final UUID cfId, final ReplayPosition context) throws IOException
     {
         Callable task = new Callable()
         {

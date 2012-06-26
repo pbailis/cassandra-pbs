@@ -67,6 +67,7 @@ public class CFPropDefs
         comparators.put("decimal", "DecimalType");
         comparators.put("double", "DoubleType");
         comparators.put("float", "FloatType");
+        comparators.put("inet", "InetAddressType");
         comparators.put("int", "Int32Type");
         comparators.put("text", "UTF8Type");
         comparators.put("timestamp", "DateType");
@@ -92,7 +93,8 @@ public class CFPropDefs
     public final Map<String, String> compactionStrategyOptions = new HashMap<String, String>();
     public final Map<String, String> compressionParameters = new HashMap<String, String>()
     {{
-        put(CompressionParameters.SSTABLE_COMPRESSION, SnappyCompressor.class.getCanonicalName());
+        if (CFMetaData.DEFAULT_COMPRESSOR != null)
+            put(CompressionParameters.SSTABLE_COMPRESSION, CFMetaData.DEFAULT_COMPRESSOR);
     }};
 
     public static AbstractType<?> parseType(String type) throws InvalidRequestException
@@ -245,7 +247,7 @@ public class CFPropDefs
         return result;
     }
 
-
+    @Override
     public String toString()
     {
         return String.format("CFPropDefs(%s, compaction: %s, compression: %s)",

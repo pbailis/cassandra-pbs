@@ -33,6 +33,7 @@ import javax.management.ObjectName;
 import org.apache.cassandra.cache.AutoSavingCache;
 import org.apache.cassandra.concurrent.DebuggableThreadPoolExecutor;
 import org.apache.cassandra.concurrent.NamedThreadFactory;
+import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.config.Schema;
 import org.apache.cassandra.db.*;
@@ -53,6 +54,7 @@ import org.slf4j.LoggerFactory;
 
 import com.google.common.base.Predicates;
 import com.google.common.collect.Iterators;
+import com.google.common.primitives.Longs;
 
 /**
  * A singleton which manages a private executor of ongoing compactions. A readwrite lock
@@ -112,6 +114,10 @@ public class CompactionManager implements CompactionManagerMBean
      */
     public Future<?> submitBackground(final ColumnFamilyStore cfs)
     {
+        logger.debug("Scheduling a background task check for {}.{} with {}",
+                     new Object[] {cfs.table.name,
+                                   cfs.columnFamily,
+                                   cfs.getCompactionStrategy().getClass().getSimpleName()});
         Runnable runnable = new WrappedRunnable()
         {
             protected void runMayThrow() throws IOException
@@ -119,10 +125,25 @@ public class CompactionManager implements CompactionManagerMBean
                 compactionLock.readLock().lock();
                 try
                 {
+                    logger.debug("Checking {}.{}", cfs.table.name, cfs.columnFamily); // log after we get the lock so we can see delays from that if any
+                    if (!cfs.isValid())
+                    {
+                        logger.debug("Aborting compaction for dropped CF");
+                        return;
+                    }
+
                     AbstractCompactionStrategy strategy = cfs.getCompactionStrategy();
                     AbstractCompactionTask task = strategy.getNextBackgroundTask(getDefaultGcBefore(cfs));
-                    if (task == null || !task.markSSTablesForCompaction())
+                    if (task == null)
+                    {
+                        logger.debug("No tasks available");
                         return;
+                    }
+                    if (!task.markSSTablesForCompaction())
+                    {
+                        logger.debug("Unable to mark SSTables for {}", task);
+                        return;
+                    }
 
                     try
                     {
@@ -228,7 +249,18 @@ public class CompactionManager implements CompactionManagerMBean
         {
             public void perform(ColumnFamilyStore store, Collection<SSTableReader> sstables) throws IOException
             {
-                doCleanupCompaction(store, sstables, renewer);
+                // Sort the column families in order of SSTable size, so cleanup of smaller CFs
+                // can free up space for larger ones
+                List<SSTableReader> sortedSSTables = new ArrayList<SSTableReader>(sstables);
+                Collections.sort(sortedSSTables, new Comparator<SSTableReader>()
+                {
+                    public int compare(SSTableReader o1, SSTableReader o2)
+                    {
+                        return Longs.compare(o1.onDiskLength(), o2.onDiskLength());
+                    }
+                });
+
+                doCleanupCompaction(store, sortedSSTables, renewer);
             }
         });
     }
@@ -491,7 +523,7 @@ public class CompactionManager implements CompactionManagerMBean
 
             while (!dataFile.isEOF())
             {
-                if (scrubInfo.isStopped())
+                if (scrubInfo.isStopRequested())
                     throw new CompactionInterruptedException(scrubInfo.getCompactionInfo());
                 long rowStart = dataFile.getFilePointer();
                 if (logger.isDebugEnabled())
@@ -710,7 +742,7 @@ public class CompactionManager implements CompactionManagerMBean
             {
                 while (scanner.hasNext())
                 {
-                    if (ci.isStopped())
+                    if (ci.isStopRequested())
                         throw new CompactionInterruptedException(ci.getCompactionInfo());
                     SSTableIdentityIterator row = (SSTableIdentityIterator) scanner.next();
                     if (Range.isInRanges(row.getKey().token, ranges))
@@ -861,7 +893,7 @@ public class CompactionManager implements CompactionManagerMBean
             validator.prepare(cfs);
             while (nni.hasNext())
             {
-                if (ci.isStopped())
+                if (ci.isStopRequested())
                     throw new CompactionInterruptedException(ci.getCompactionInfo());
                 AbstractCompactedRow row = nni.next();
                 validator.add(row);
@@ -1032,7 +1064,7 @@ public class CompactionManager implements CompactionManagerMBean
             // notify
             ci.finished();
             compactions.remove(ci);
-            totalBytesCompacted += ci.getCompactionInfo().getTotalBytes();
+            totalBytesCompacted += ci.getCompactionInfo().getTotal();
             totalCompactionsCompleted += 1;
         }
 
@@ -1045,7 +1077,7 @@ public class CompactionManager implements CompactionManagerMBean
         {
             long bytesCompletedInProgress = 0L;
             for (CompactionInfo.Holder ci : compactions)
-                bytesCompletedInProgress += ci.getCompactionInfo().getBytesComplete();
+                bytesCompletedInProgress += ci.getCompactionInfo().getCompleted();
             return bytesCompletedInProgress + totalBytesCompacted;
         }
 
@@ -1189,9 +1221,7 @@ public class CompactionManager implements CompactionManagerMBean
         {
             try
             {
-                return new CompactionInfo(this.hashCode(),
-                                          sstable.descriptor.ksname,
-                                          sstable.descriptor.cfname,
+                return new CompactionInfo(sstable.metadata,
                                           OperationType.CLEANUP,
                                           scanner.getCurrentPosition(),
                                           scanner.getLengthInBytes());
@@ -1217,9 +1247,7 @@ public class CompactionManager implements CompactionManagerMBean
         {
             try
             {
-                return new CompactionInfo(this.hashCode(),
-                                          sstable.descriptor.ksname,
-                                          sstable.descriptor.cfname,
+                return new CompactionInfo(sstable.metadata,
                                           OperationType.SCRUB,
                                           dataFile.getFilePointer(),
                                           dataFile.length());
@@ -1238,6 +1266,25 @@ public class CompactionManager implements CompactionManagerMBean
         {
             if (holder.getCompactionInfo().getTaskType() == operation)
                 holder.stop();
+        }
+    }
+
+    /**
+     * Try to stop all of the compactions for given ColumnFamilies.
+     * Note that this method does not wait indefinitely for all compactions to finish, maximum wait time is 30 secs.
+     *
+     * @param columnFamilies The ColumnFamilies to try to stop compaction upon.
+     */
+    public void stopCompactionFor(Collection<CFMetaData> columnFamilies)
+    {
+        assert columnFamilies != null;
+
+        for (Holder compactionHolder : CompactionExecutor.getCompactions())
+        {
+            CompactionInfo info = compactionHolder.getCompactionInfo();
+
+            if (columnFamilies.contains(info.getCFMetaData()))
+                compactionHolder.stop(); // signal compaction to stop
         }
     }
 }

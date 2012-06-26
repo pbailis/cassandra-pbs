@@ -32,6 +32,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+
 import com.google.common.base.Joiner;
 import com.google.common.collect.AbstractIterator;
 import org.apache.commons.lang.StringUtils;
@@ -42,7 +43,6 @@ import org.apache.cassandra.cache.IRowCacheProvider;
 import org.apache.cassandra.concurrent.CreationTimeAwareFuture;
 import org.apache.cassandra.config.ConfigurationException;
 import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.db.DecoratedKey;
 import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.dht.Range;
@@ -240,6 +240,7 @@ public class FBUtilities
         new File(tmpFilename).renameTo(new File(filename));
     }
 
+    @Deprecated
     public static void serialize(TSerializer serializer, TBase struct, DataOutput out)
     throws IOException
     {
@@ -259,6 +260,7 @@ public class FBUtilities
         out.write(bytes);
     }
 
+    @Deprecated
     public static void deserialize(TDeserializer deserializer, TBase struct, DataInput in)
     throws IOException
     {
@@ -567,6 +569,18 @@ public class FBUtilities
         }
     }
 
+    public static void sleep(int millis)
+    {
+        try
+        {
+            Thread.sleep(millis);
+        }
+        catch (InterruptedException e)
+        {
+            throw new AssertionError();
+        }
+    }
+
     private static final class WrappedCloseableIterator<T>
         extends AbstractIterator<T> implements CloseableIterator<T>
     {
@@ -592,7 +606,7 @@ public class FBUtilities
         DataOutputBuffer buffer = new DataOutputBuffer(size);
         serializer.serialize(object, buffer, version);
         assert buffer.getLength() == size && buffer.getData().length == size
-               : String.format("Final buffer length %s to accomodate data size of %s (predicted %s) for %s",
+               : String.format("Final buffer length %s to accommodate data size of %s (predicted %s) for %s",
                                buffer.getData().length, buffer.getLength(), size, object);
         return buffer.getData();
     }

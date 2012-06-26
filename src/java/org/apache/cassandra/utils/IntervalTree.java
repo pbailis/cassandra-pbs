@@ -251,7 +251,7 @@ public class IntervalTree<C, D, I extends Interval<C, D>> implements Iterable<I>
                     allEndpoints.add(interval.min);
                     allEndpoints.add(interval.max);
                 }
-                if (comparator == null)
+                if (comparator != null)
                     Collections.sort(allEndpoints, comparator);
                 else
                     Collections.sort((List<Comparable>)allEndpoints);
@@ -290,6 +290,9 @@ public class IntervalTree<C, D, I extends Interval<C, D>> implements Iterable<I>
 
         void searchInternal(Interval<C, D> searchInterval, List<D> results)
         {
+            if (comparePoints(searchInterval.max, low) < 0 || comparePoints(searchInterval.min, high) > 0)
+                return;
+
             if (contains(searchInterval, center))
             {
                 // Adds every interval contained in this node to the result set then search left and right for further

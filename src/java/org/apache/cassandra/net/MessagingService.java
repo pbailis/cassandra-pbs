@@ -54,7 +54,6 @@ import org.apache.cassandra.gms.GossipDigestSyn;
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.util.DataOutputBuffer;
 import org.apache.cassandra.locator.ILatencySubscriber;
-import org.apache.cassandra.net.io.SerializerType;
 import org.apache.cassandra.net.sink.SinkManager;
 import org.apache.cassandra.security.SSLFactory;
 import org.apache.cassandra.service.AntiEntropyService;
@@ -65,6 +64,7 @@ import org.apache.cassandra.service.ReadCallback;
 import org.apache.cassandra.service.StorageProxy;
 import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.streaming.*;
+import org.apache.cassandra.streaming.compress.CompressedFileStreamTask;
 import org.apache.cassandra.utils.*;
 import org.cliffc.high_scale_lib.NonBlockingHashMap;
 
@@ -74,14 +74,11 @@ public final class MessagingService implements MessagingServiceMBean
     public static final String MBEAN_NAME = "org.apache.cassandra.net:type=MessagingService";
 
     // 8 bits version, so don't waste versions
-    public static final int VERSION_07 = 1;
-    public static final int VERSION_080 = 2;
+    // We are no longer compatible with versions older than 1.0
     public static final int VERSION_10 = 3;
     public static final int VERSION_11 = 4;
     public static final int VERSION_12 = 5;
     public static final int current_version = VERSION_12;
-
-    static SerializerType serializerType = SerializerType.BINARY;
 
     /** we preface every message with this number so the recipient can validate the sender is sane */
     static final int PROTOCOL_MAGIC = 0xCA552DFA;
@@ -291,7 +288,9 @@ public final class MessagingService implements MessagingServiceMBean
     private final Map<String, AtomicLong> timeoutsPerHost = new HashMap<String, AtomicLong>();
     private final Map<String, AtomicLong> recentTimeoutsPerHost = new HashMap<String, AtomicLong>();
     private final List<ILatencySubscriber> subscribers = new ArrayList<ILatencySubscriber>();
-    private static final long DEFAULT_CALLBACK_TIMEOUT = DatabaseDescriptor.getRpcTimeout();
+
+    // protocol versions of the other nodes in the cluster
+    private final ConcurrentMap<InetAddress, Integer> versions = new NonBlockingHashMap<InetAddress, Integer>();
 
     private static class MSHandle
     {
@@ -322,12 +321,12 @@ public final class MessagingService implements MessagingServiceMBean
         };
         StorageService.scheduledTasks.scheduleWithFixedDelay(logDropped, LOG_DROPPED_INTERVAL_IN_MS, LOG_DROPPED_INTERVAL_IN_MS, TimeUnit.MILLISECONDS);
 
-        Function<Pair<String, CallbackInfo>, ?> timeoutReporter = new Function<Pair<String, CallbackInfo>, Object>()
+        Function<Pair<String, ExpiringMap.CacheableObject<CallbackInfo>>, ?> timeoutReporter = new Function<Pair<String, ExpiringMap.CacheableObject<CallbackInfo>>, Object>()
         {
-            public Object apply(Pair<String, CallbackInfo> pair)
+            public Object apply(Pair<String, ExpiringMap.CacheableObject<CallbackInfo>> pair)
             {
-                CallbackInfo expiredCallbackInfo = pair.right;
-                maybeAddLatency(expiredCallbackInfo.callback, expiredCallbackInfo.target, (double) DatabaseDescriptor.getRpcTimeout());
+                CallbackInfo expiredCallbackInfo = pair.right.value;
+                maybeAddLatency(expiredCallbackInfo.callback, expiredCallbackInfo.target, (double) pair.right.timeout);
                 totalTimeouts++;
                 String ip = expiredCallbackInfo.target.getHostAddress();
                 AtomicLong c = timeoutsPerHost.get(ip);
@@ -353,7 +352,7 @@ public final class MessagingService implements MessagingServiceMBean
             }
         };
 
-        callbacks = new ExpiringMap<String, CallbackInfo>(DEFAULT_CALLBACK_TIMEOUT, timeoutReporter);
+        callbacks = new ExpiringMap<String, CallbackInfo>(DatabaseDescriptor.getMinRpcTimeout(), timeoutReporter);
 
         MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
         try
@@ -491,11 +490,6 @@ public final class MessagingService implements MessagingServiceMBean
         return verbHandlers.get(type);
     }
 
-    public String addCallback(IMessageCallback cb, MessageOut message, InetAddress to)
-    {
-        return addCallback(cb, message, to, DEFAULT_CALLBACK_TIMEOUT);
-    }
-
     public String addCallback(IMessageCallback cb, MessageOut message, InetAddress to, long timeout)
     {
         String messageId = nextId();
@@ -523,7 +517,7 @@ public final class MessagingService implements MessagingServiceMBean
      */
     public String sendRR(MessageOut message, InetAddress to, IMessageCallback cb)
     {
-        return sendRR(message, to, cb, DEFAULT_CALLBACK_TIMEOUT);
+        return sendRR(message, to, cb, message.getTimeout());
     }
 
     /**
@@ -623,7 +617,9 @@ public final class MessagingService implements MessagingServiceMBean
             }
         }
 
-        executor.execute(new FileStreamTask(header, to));
+        executor.execute(header.file == null || header.file.compressionInfo == null
+                                 ? new FileStreamTask(header, to)
+                                 : new CompressedFileStreamTask(header, to));
     }
 
     public void incrementActiveStreamsOutbound()
@@ -732,34 +728,21 @@ public final class MessagingService implements MessagingServiceMBean
             throw new IOException("invalid protocol header");
     }
 
-    public static int getBits(int x, int p, int n)
+    public static int getBits(int packed, int start, int count)
     {
-        return x >>> (p + 1) - n & ~(-1 << n);
+        return packed >>> (start + 1) - count & ~(-1 << count);
     }
 
     public ByteBuffer constructStreamHeader(StreamHeader streamHeader, boolean compress, int version)
     {
-        /*
-        Setting up the protocol header. This is 4 bytes long
-        represented as an integer. The first 2 bits indicate
-        the serializer type. The 3rd bit indicates if compression
-        is turned on or off. It is turned off by default. The 4th
-        bit indicates if we are in streaming mode. It is turned off
-        by default. The following 4 bits are reserved for future use.
-        The next 8 bits indicate a version number. Remaining 15 bits
-        are not used currently.
-        */
         int header = 0;
-        // Setting up the serializer bit
-        header |= serializerType.ordinal();
         // set compression bit.
-        if ( compress )
+        if (compress)
             header |= 4;
         // set streaming bit
         header |= 8;
         // Setting up the version bit
         header |= (version << 8);
-        /* Finished the protocol header setup */
 
         /* Adding the StreamHeader which contains the session Id along
          * with the pendingfile info for the stream.
@@ -786,6 +769,45 @@ public final class MessagingService implements MessagingServiceMBean
         buffer.put(bytes);
         buffer.flip();
         return buffer;
+    }
+
+    /**
+     * @return the last version associated with address, or @param version if this is the first such version
+     */
+    public int setVersion(InetAddress address, int version)
+    {
+        logger.debug("Setting version {} for {}", version, address);
+        Integer v = versions.put(address, version);
+        return v == null ? version : v;
+    }
+
+    public void resetVersion(InetAddress endpoint)
+    {
+        logger.debug("Reseting version for {}", endpoint);
+        versions.remove(endpoint);
+    }
+
+    public Integer getVersion(InetAddress address)
+    {
+        Integer v = versions.get(address);
+        if (v == null)
+        {
+            // we don't know the version. assume current. we'll know soon enough if that was incorrect.
+            logger.trace("Assuming current protocol version for {}", address);
+            return MessagingService.current_version;
+        }
+        else
+            return v;
+    }
+
+    public int getVersion(String address) throws UnknownHostException
+    {
+        return getVersion(InetAddress.getByName(address));
+    }
+
+    public boolean knowsVersion(InetAddress endpoint)
+    {
+        return versions.get(endpoint) != null;
     }
 
     public void incrementDroppedMessages(Verb verb)
@@ -897,11 +919,6 @@ public final class MessagingService implements MessagingServiceMBean
         for (Map.Entry<InetAddress, OutboundTcpConnectionPool> entry : connectionManagers.entrySet())
             completedTasks.put(entry.getKey().getHostAddress(), entry.getValue().ackCon.getCompletedMesssages());
         return completedTasks;
-    }
-
-    public static long getDefaultCallbackTimeout()
-    {
-        return DEFAULT_CALLBACK_TIMEOUT;
     }
 
     public Map<String, Integer> getDroppedMessages()

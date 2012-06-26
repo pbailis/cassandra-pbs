@@ -362,9 +362,13 @@ public class StorageProxy implements StorageProxyMBean
                 try
                 {
                     UUID hostId = StorageService.instance.getTokenMetadata().getHostId(target);
-                    if ((hostId == null) && (Gossiper.instance.getVersion(target) < MessagingService.VERSION_12))
-                        logger.info("Unable to store hint for host with missing ID, {} (old node?)", target.toString());
-                    RowMutation hintedMutation = RowMutation.hintFor(mutation, ByteBuffer.wrap(UUIDGen.decompose(hostId)));
+                    if ((hostId == null) && (MessagingService.instance().getVersion(target) < MessagingService.VERSION_12))
+                    {
+                        logger.warn("Unable to store hint for host with missing ID, {} (old node?)", target.toString());
+                        return;
+                    }
+                    assert hostId != null : "Missing host ID for " + target.getHostAddress();
+                    RowMutation hintedMutation = RowMutation.hintFor(mutation, hostId);
                     hintedMutation.apply();
 
                     totalHints.incrementAndGet();
@@ -405,7 +409,7 @@ public class StorageProxy implements StorageProxyMBean
                 InetAddress target = iter.next();
 
                 // direct writes to local DC or old Cassadra versions
-                if (dataCenter.equals(localDataCenter) || Gossiper.instance.getVersion(target) < MessagingService.VERSION_11)
+                if (dataCenter.equals(localDataCenter) || MessagingService.instance().getVersion(target) < MessagingService.VERSION_11)
                 {
                     // yes, the loop and non-loop code here are the same; this is clunky but we want to avoid
                     // creating a second iterator since we already have a perfectly good one
@@ -426,7 +430,7 @@ public class StorageProxy implements StorageProxyMBean
                 {
                     InetAddress destination = iter.next();
                     CompactEndpointSerializationHelper.serialize(destination, dos);
-                    String id = MessagingService.instance().addCallback(handler, message, destination);
+                    String id = MessagingService.instance().addCallback(handler, message, destination, message.getTimeout());
                     dos.writeUTF(id);
                     if (logger.isDebugEnabled())
                         logger.debug("Adding FWD message to: " + destination + " with ID " + id);
@@ -759,7 +763,7 @@ public class StorageProxy implements StorageProxyMBean
                     RepairCallback handler = repairResponseHandlers.get(i);
                     // wait for the repair writes to be acknowledged, to minimize impact on any replica that's
                     // behind on writes in case the out-of-sync row is read multiple times in quick succession
-                    FBUtilities.waitOnFutures(handler.resolver.repairResults, DatabaseDescriptor.getRpcTimeout());
+                    FBUtilities.waitOnFutures(handler.resolver.repairResults, DatabaseDescriptor.getWriteRpcTimeout());
 
                     Row row;
                     try
@@ -841,6 +845,22 @@ public class StorageProxy implements StorageProxyMBean
             int columnsCount = 0;
             rows = new ArrayList<Row>();
             List<AbstractBounds<RowPosition>> ranges = getRestrictedRanges(command.range);
+            
+            // get the cardinality of this index based on row count
+            // use this info to decide how many scans to do in parallel
+            long estimatedKeys = Table.open(command.keyspace).getColumnFamilyStore(command.column_family)
+                    .estimateKeys();
+            int concurrencyFactor = (int) command.maxResults / ((int) estimatedKeys + 1);
+
+            if (concurrencyFactor <= 0)
+                concurrencyFactor = 1;
+
+            if (concurrencyFactor > ranges.size())
+                concurrencyFactor = ranges.size();
+            
+            // parallel scan handlers
+            List<ReadCallback<RangeSliceReply, Iterable<Row>>> scanHandlers = new ArrayList<ReadCallback<RangeSliceReply, Iterable<Row>>>(concurrencyFactor);
+            
             for (AbstractBounds<RowPosition> range : ranges)
             {
                 RangeSliceCommand nodeCmd = new RangeSliceCommand(command.keyspace,
@@ -891,32 +911,40 @@ public class StorageProxy implements StorageProxyMBean
                             logger.debug("reading " + nodeCmd + " from " + endpoint);
                     }
 
-                    try
+                    scanHandlers.add(handler);
+                    if (scanHandlers.size() >= concurrencyFactor)
                     {
-                        for (Row row : handler.get())
+                        for (ReadCallback<RangeSliceReply, Iterable<Row>> scanHandler : scanHandlers)
                         {
-                            rows.add(row);
-                            columnsCount += row.getLiveColumnCount();
-                            logger.debug("range slices read {}", row.key);
+                            try
+                            {
+                                for (Row row : scanHandler.get())
+                                {
+                                    rows.add(row);
+                                    columnsCount += row.getLiveColumnCount();
+                                    logger.debug("range slices read {}", row.key);
+                                }
+                                FBUtilities.waitOnFutures(resolver.repairResults, DatabaseDescriptor.getRangeRpcTimeout());
+                            }
+                            catch (TimeoutException ex)
+                            {
+                                if (logger.isDebugEnabled())
+                                    logger.debug("Range slice timeout: {}", ex.toString());
+                                throw ex;
+                            }
+                            catch (DigestMismatchException e)
+                            {
+                                throw new AssertionError(e); // no digests in range slices yet
+                            }
+
+                            // if we're done, great, otherwise, move to the next range
+                            int count = nodeCmd.maxIsColumns ? columnsCount : rows.size();
+                            if (count >= nodeCmd.maxResults)
+                                break;
                         }
-                        FBUtilities.waitOnFutures(resolver.repairResults, DatabaseDescriptor.getRpcTimeout());
-                    }
-                    catch (TimeoutException ex)
-                    {
-                        if (logger.isDebugEnabled())
-                            logger.debug("Range slice timeout: {}", ex.toString());
-                        throw ex;
-                    }
-                    catch (DigestMismatchException e)
-                    {
-                        throw new AssertionError(e); // no digests in range slices yet
+                        scanHandlers.clear(); //go back for more
                     }
                 }
-
-                // if we're done, great, otherwise, move to the next range
-                int count = nodeCmd.maxIsColumns ? columnsCount : rows.size();
-                if (count >= nodeCmd.maxResults)
-                    break;
             }
         }
         finally
@@ -1233,7 +1261,7 @@ public class StorageProxy implements StorageProxyMBean
 
         public final void run()
         {
-            if (System.currentTimeMillis() > constructionTime + DatabaseDescriptor.getRpcTimeout())
+            if (System.currentTimeMillis() > constructionTime + DatabaseDescriptor.getTimeout(verb))
             {
                 MessagingService.instance().incrementDroppedMessages(verb);
                 return;
@@ -1278,13 +1306,18 @@ public class StorageProxy implements StorageProxyMBean
             logger.warn("Some hints were not written before shutdown.  This is not supposed to happen.  You should (a) run repair, and (b) file a bug report");
     }
 
-    public Long getRpcTimeout()
-    {
-        return DatabaseDescriptor.getRpcTimeout();
-    }
+    public Long getRpcTimeout() { return DatabaseDescriptor.getRpcTimeout(); }
+    public void setRpcTimeout(Long timeoutInMillis) { DatabaseDescriptor.setRpcTimeout(timeoutInMillis); }
 
-    public void setRpcTimeout(Long timeoutInMillis)
-    {
-        DatabaseDescriptor.setRpcTimeout(timeoutInMillis);
-    }
+    public Long getReadRpcTimeout() { return DatabaseDescriptor.getReadRpcTimeout(); }
+    public void setReadRpcTimeout(Long timeoutInMillis) { DatabaseDescriptor.setReadRpcTimeout(timeoutInMillis); }
+
+    public Long getWriteRpcTimeout() { return DatabaseDescriptor.getWriteRpcTimeout(); }
+    public void setWriteRpcTimeout(Long timeoutInMillis) { DatabaseDescriptor.setWriteRpcTimeout(timeoutInMillis); }
+
+    public Long getRangeRpcTimeout() { return DatabaseDescriptor.getRangeRpcTimeout(); }
+    public void setRangeRpcTimeout(Long timeoutInMillis) { DatabaseDescriptor.setRangeRpcTimeout(timeoutInMillis); }
+
+    public Long getTruncateRpcTimeout() { return DatabaseDescriptor.getTruncateRpcTimeout(); }
+    public void setTruncateRpcTimeout(Long timeoutInMillis) { DatabaseDescriptor.setTruncateRpcTimeout(timeoutInMillis); }
 }

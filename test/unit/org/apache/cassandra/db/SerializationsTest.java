@@ -21,7 +21,8 @@ package org.apache.cassandra.db;
 import org.apache.cassandra.AbstractSerializationsTester;
 import org.apache.cassandra.Util;
 import org.apache.cassandra.config.Schema;
-import org.apache.cassandra.db.filter.QueryPath;
+import org.apache.cassandra.db.filter.*;
+import org.apache.cassandra.db.marshal.BytesType;
 import org.apache.cassandra.dht.AbstractBounds;
 import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.dht.Range;
@@ -34,34 +35,32 @@ import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.thrift.SlicePredicate;
 import org.apache.cassandra.thrift.SliceRange;
 import org.apache.cassandra.utils.ByteBufferUtil;
-import org.apache.cassandra.utils.FBUtilities;
 
+import org.junit.BeforeClass;
 import org.junit.Test;
 
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.HashMap;
+import java.util.*;
 
 public class SerializationsTest extends AbstractSerializationsTester
 {
+    @BeforeClass
+    public static void loadSchema() throws IOException
+    {
+        loadSchema(true);
+    }
+
     private void testRangeSliceCommandWrite() throws IOException
     {
         ByteBuffer startCol = ByteBufferUtil.bytes("Start");
         ByteBuffer stopCol = ByteBufferUtil.bytes("Stop");
         ByteBuffer emptyCol = ByteBufferUtil.bytes("");
-        SlicePredicate namesPred = new SlicePredicate();
-        namesPred.column_names = Statics.NamedCols;
-        SliceRange emptySliceRange = new SliceRange(emptyCol, emptyCol, false, 100);
-        SliceRange nonEmptySliceRange = new SliceRange(startCol, stopCol, true, 100);
-        SlicePredicate emptyRangePred = new SlicePredicate();
-        emptyRangePred.slice_range = emptySliceRange;
-        SlicePredicate nonEmptyRangePred = new SlicePredicate();
-        nonEmptyRangePred.slice_range = nonEmptySliceRange;
+        NamesQueryFilter namesPred = new NamesQueryFilter(Statics.NamedCols);
+        SliceQueryFilter emptyRangePred = new SliceQueryFilter(emptyCol, emptyCol, false, 100);
+        SliceQueryFilter nonEmptyRangePred = new SliceQueryFilter(startCol, stopCol, true, 100);
         IPartitioner part = StorageService.getPartitioner();
         AbstractBounds<RowPosition> bounds = new Range<Token>(part.getRandomToken(), part.getRandomToken()).toRowBounds();
 
@@ -213,7 +212,7 @@ public class SerializationsTest extends AbstractSerializationsTester
         standardRm.add(Statics.StandardCf);
         RowMutation superRm = new RowMutation(Statics.KS, Statics.Key);
         superRm.add(Statics.SuperCf);
-        Map<Integer, ColumnFamily> mods = new HashMap<Integer, ColumnFamily>();
+        Map<UUID, ColumnFamily> mods = new HashMap<UUID, ColumnFamily>();
         mods.put(Statics.StandardCf.metadata().cfId, Statics.StandardCf);
         mods.put(Statics.SuperCf.metadata().cfId, Statics.SuperCf);
         RowMutation mixedRm = new RowMutation(Statics.KS, Statics.Key, mods);
@@ -359,7 +358,7 @@ public class SerializationsTest extends AbstractSerializationsTester
     {
         private static final String KS = "Keyspace1";
         private static final ByteBuffer Key = ByteBufferUtil.bytes("Key01");
-        private static final List<ByteBuffer> NamedCols = new ArrayList<ByteBuffer>()
+        private static final SortedSet<ByteBuffer> NamedCols = new TreeSet<ByteBuffer>(BytesType.instance)
         {{
             add(ByteBufferUtil.bytes("AAA"));
             add(ByteBufferUtil.bytes("BBB"));

@@ -145,13 +145,21 @@ if [ "x$CASSANDRA_HEAPDUMP_DIR" != "x" ]; then
     JVM_OPTS="$JVM_OPTS -XX:HeapDumpPath=$CASSANDRA_HEAPDUMP_DIR/cassandra-`date +%s`-pid$$.hprof"
 fi
 
+
 if [ "`uname`" = "Linux" ] ; then
+    java_version=`"${JAVA:-java}" -version 2>&1 | awk '/version/ {print $3}' | egrep -o '[0-9]+\.[0-9]+'`
     # reduce the per-thread stack size to minimize the impact of Thrift
     # thread-per-client.  (Best practice is for client connections to
     # be pooled anyway.) Only do so on Linux where it is known to be
     # supported.
-    JVM_OPTS="$JVM_OPTS -Xss128k"
+    if [ "$java_version" = "1.7" ]
+    then
+        JVM_OPTS="$JVM_OPTS -Xss160k"
+    else
+        JVM_OPTS="$JVM_OPTS -Xss128k"
+    fi
 fi
+echo "xss = $JVM_OPTS"
 
 # GC tuning options
 JVM_OPTS="$JVM_OPTS -XX:+UseParNewGC" 
@@ -161,6 +169,10 @@ JVM_OPTS="$JVM_OPTS -XX:SurvivorRatio=8"
 JVM_OPTS="$JVM_OPTS -XX:MaxTenuringThreshold=1"
 JVM_OPTS="$JVM_OPTS -XX:CMSInitiatingOccupancyFraction=75"
 JVM_OPTS="$JVM_OPTS -XX:+UseCMSInitiatingOccupancyOnly"
+if [ "$java_version" = "1.7" ]
+then
+    JVM_OPTS="$JVM_OPTS -XX:+UseCondCardMark"
+fi
 
 # GC logging options -- uncomment to enable
 # JVM_OPTS="$JVM_OPTS -XX:+PrintGCDetails"

@@ -72,7 +72,6 @@ options {
         if (op == null && (value.isBindMarker() || Long.parseLong(value.getText()) > 0))
             throw new MissingTokenException(102, stream, value);
     }
-
 }
 
 @lexer::header {
@@ -179,14 +178,21 @@ selectStatement returns [SelectStatement.RawStatement expr]
       }
     ;
 
-selectClause returns [List<ColumnIdentifier> expr]
-    : ids=cidentList { $expr = ids; }
-    | '\*'           { $expr = Collections.<ColumnIdentifier>emptyList();}
+selectClause returns [List<Selector> expr]
+    : t1=selector { $expr = new ArrayList<Selector>(); $expr.add(t1); } (',' tN=selector { $expr.add(tN); })*
+    | '\*' { $expr = Collections.<Selector>emptyList();}
     ;
 
-selectCountClause returns [List<ColumnIdentifier> expr]
-    : c=selectClause { $expr = c; }
-    | i=INTEGER      { if (!i.getText().equals("1")) addRecognitionError("Only COUNT(1) is supported, got COUNT(" + i.getText() + ")"); $expr = Collections.<ColumnIdentifier>emptyList();}
+selector returns [Selector s]
+    : c=cident             { $s = c; }
+    | K_WRITETIME '(' c=cident ')' { $s = new Selector.WithFunction(c, Selector.Function.WRITE_TIME); }
+    | K_TTL '(' c=cident ')'       { $s = new Selector.WithFunction(c, Selector.Function.TTL); }
+    ;
+
+selectCountClause returns [List<Selector> expr]
+    : ids=cidentList { $expr = new ArrayList<Selector>(ids); }
+    | '\*'           { $expr = Collections.<Selector>emptyList();}
+    | i=INTEGER      { if (!i.getText().equals("1")) addRecognitionError("Only COUNT(1) is supported, got COUNT(" + i.getText() + ")"); $expr = Collections.<Selector>emptyList();}
     ;
 
 whereClause returns [List<Relation> clause]
@@ -492,7 +498,8 @@ termPairWithOperation[Map<ColumnIdentifier, Operation> columns]
     ;
 
 property returns [String str]
-    : p=(COMPIDENT | IDENT) { $str = $p.text; }
+    @init{ StringBuilder sb = new StringBuilder(); }
+    : c1=cident { sb.append(c1); } ( ':' cn=cident { sb.append(':').append(cn); } )* { $str = sb.toString(); }
     ;
 
 propertyValue returns [String str]
@@ -526,6 +533,7 @@ native_type returns [String str]
         | K_DECIMAL
         | K_DOUBLE
         | K_FLOAT
+        | K_INET
         | K_INT
         | K_TEXT
         | K_TIMESTAMP
@@ -547,6 +555,7 @@ unreserved_keyword returns [String str]
         | K_STORAGE
         | K_TYPE
         | K_VALUES
+        | K_WRITETIME
         ) { $str = $k.text; }
     | t=native_type { $str = t; }
     ;
@@ -615,6 +624,7 @@ K_COUNTER:     C O U N T E R;
 K_DECIMAL:     D E C I M A L;
 K_DOUBLE:      D O U B L E;
 K_FLOAT:       F L O A T;
+K_INET:        I N E T;
 K_INT:         I N T;
 K_TEXT:        T E X T;
 K_UUID:        U U I D;
@@ -622,6 +632,7 @@ K_VARCHAR:     V A R C H A R;
 K_VARINT:      V A R I N T;
 K_TIMEUUID:    T I M E U U I D;
 K_TOKEN:       T O K E N;
+K_WRITETIME:   W R I T E T I M E;
 
 // Case-insensitive alpha characters
 fragment A: ('a'|'A');
@@ -693,10 +704,6 @@ FLOAT
 
 IDENT
     : LETTER (LETTER | DIGIT | '_')*
-    ;
-
-COMPIDENT
-    : IDENT ( ':' (IDENT | INTEGER))+
     ;
 
 UUID

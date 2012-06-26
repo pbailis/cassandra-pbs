@@ -26,6 +26,7 @@ import java.net.URL;
 import java.net.UnknownHostException;
 import java.util.*;
 
+import com.google.common.primitives.Longs;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,10 +46,12 @@ import org.apache.cassandra.locator.DynamicEndpointSnitch;
 import org.apache.cassandra.locator.EndpointSnitchInfo;
 import org.apache.cassandra.locator.IEndpointSnitch;
 import org.apache.cassandra.locator.SeedProvider;
+import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.scheduler.IRequestScheduler;
 import org.apache.cassandra.scheduler.NoScheduler;
 import org.apache.cassandra.service.CacheService;
 import org.apache.cassandra.service.MigrationManager;
+import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.thrift.CassandraDaemon;
 import org.apache.cassandra.utils.FBUtilities;
 import org.yaml.snakeyaml.Loader;
@@ -82,7 +85,7 @@ public class DatabaseDescriptor
     private static RequestSchedulerId requestSchedulerId;
     private static RequestSchedulerOptions requestSchedulerOptions;
 
-    private static int keyCacheSizeInMB;
+    private static long keyCacheSizeInMB;
     private static IRowCacheProvider rowCacheProvider;
 
     /**
@@ -381,13 +384,10 @@ public class DatabaseDescriptor
             if (!CassandraDaemon.rpc_server_types.contains(conf.rpc_server_type.toLowerCase()))
                 throw new ConfigurationException("Unknown rpc_server_type: " + conf.rpc_server_type);
             if (conf.rpc_min_threads == null)
-                conf.rpc_min_threads = conf.rpc_server_type.toLowerCase().equals("hsha")
-                                     ? Runtime.getRuntime().availableProcessors() * 4
-                                     : 16;
+                conf.rpc_min_threads = 16;
+
             if (conf.rpc_max_threads == null)
-                conf.rpc_max_threads = conf.rpc_server_type.toLowerCase().equals("hsha")
-                                     ? Runtime.getRuntime().availableProcessors() * 4
-                                     : Integer.MAX_VALUE;
+                conf.rpc_max_threads = Integer.MAX_VALUE;
 
             /* data file and commit log directories. they get created later, when they're needed. */
             if (conf.commitlog_directory != null && conf.data_file_directories != null && conf.saved_caches_directory != null)
@@ -420,7 +420,7 @@ public class DatabaseDescriptor
             {
                 // if key_cache_size_in_mb option was set to "auto" then size of the cache should be "min(5% of Heap (in MB), 100MB)
                 keyCacheSizeInMB = (conf.key_cache_size_in_mb == null)
-                                    ? Math.min((int) (Runtime.getRuntime().totalMemory() * 0.05 / 1024 / 1024), 100)
+                                    ? Math.min(Math.max(1, (int) (Runtime.getRuntime().totalMemory() * 0.05 / 1024 / 1024)), 100)
                                     : conf.key_cache_size_in_mb;
 
                 if (keyCacheSizeInMB < 0)
@@ -436,17 +436,8 @@ public class DatabaseDescriptor
 
             // Hardcoded system tables
             KSMetaData systemMeta = KSMetaData.systemKeyspace();
-            Schema.instance.load(CFMetaData.StatusCf);
-            Schema.instance.load(CFMetaData.HintsCf);
-            Schema.instance.load(CFMetaData.MigrationsCf);
-            Schema.instance.load(CFMetaData.SchemaCf);
-            Schema.instance.load(CFMetaData.IndexCf);
-            Schema.instance.load(CFMetaData.NodeIdCf);
-            Schema.instance.load(CFMetaData.VersionCf);
-            Schema.instance.load(CFMetaData.SchemaKeyspacesCf);
-            Schema.instance.load(CFMetaData.SchemaColumnFamiliesCf);
-            Schema.instance.load(CFMetaData.SchemaColumnsCf);
-            Schema.instance.load(CFMetaData.HostIdCf);
+            for (CFMetaData cfm : systemMeta.cfMetaData().values())
+                Schema.instance.load(cfm);
 
             Schema.instance.addSystemTable(systemMeta);
 
@@ -536,7 +527,6 @@ public class DatabaseDescriptor
         }
 
         Schema.instance.updateVersion();
-        Schema.instance.fixCFMaxId();
     }
 
     private static boolean hasExistingNoSystemTables()
@@ -707,6 +697,73 @@ public class DatabaseDescriptor
     public static void setRpcTimeout(Long timeOutInMillis)
     {
         conf.rpc_timeout_in_ms = timeOutInMillis;
+    }
+
+    public static long getReadRpcTimeout()
+    {
+        return conf.read_rpc_timeout_in_ms;
+    }
+
+    public static void setReadRpcTimeout(Long timeOutInMillis)
+    {
+        conf.read_rpc_timeout_in_ms = timeOutInMillis;
+    }
+
+    public static long getRangeRpcTimeout()
+    {
+        return conf.range_rpc_timeout_in_ms;
+    }
+
+    public static void setRangeRpcTimeout(Long timeOutInMillis)
+    {
+        conf.range_rpc_timeout_in_ms = timeOutInMillis;
+    }
+
+    public static long getWriteRpcTimeout()
+    {
+        return conf.write_rpc_timeout_in_ms;
+    }
+
+    public static void setWriteRpcTimeout(Long timeOutInMillis)
+    {
+        conf.write_rpc_timeout_in_ms = timeOutInMillis;
+    }
+
+    public static long getTruncateRpcTimeout()
+    {
+        return conf.truncate_rpc_timeout_in_ms;
+    }
+
+    public static void setTruncateRpcTimeout(Long timeOutInMillis)
+    {
+        conf.truncate_rpc_timeout_in_ms = timeOutInMillis;
+    }
+
+    // not part of the Verb enum so we can change timeouts easily via JMX
+    public static long getTimeout(MessagingService.Verb verb)
+    {
+        switch (verb)
+        {
+            case READ:
+                return getReadRpcTimeout();
+            case RANGE_SLICE:
+                return getRangeRpcTimeout();
+            case TRUNCATE:
+                return getTruncateRpcTimeout();
+            case READ_REPAIR:
+            case MUTATION:
+                return getWriteRpcTimeout();
+            default:
+                return getRpcTimeout();
+        }
+    }
+
+    /**
+     * @return the minimum configured {read, write, range, truncate, misc} timeout
+     */
+    public static long getMinRpcTimeout()
+    {
+        return Longs.min(getRpcTimeout(), getReadRpcTimeout(), getRangeRpcTimeout(), getWriteRpcTimeout(), getTruncateRpcTimeout());
     }
 
     public static double getPhiConvictThreshold()
@@ -905,9 +962,9 @@ public class DatabaseDescriptor
         return conf.index_interval;
     }
 
-    public static File getSerializedCachePath(String ksName, String cfName, CacheService.CacheType cacheType)
+    public static File getSerializedCachePath(String ksName, String cfName, CacheService.CacheType cacheType, String version)
     {
-        return new File(conf.saved_caches_directory + File.separator + ksName + "-" + cfName + "-" + cacheType);
+        return new File(conf.saved_caches_directory + File.separator + ksName + "-" + cfName + "-" + cacheType + ((version != null) ? "-" + version + ".db" : ""));
     }
 
     public static int getDynamicUpdateInterval()
@@ -958,9 +1015,14 @@ public class DatabaseDescriptor
         return conf.reduce_cache_capacity_to;
     }
 
-    public static int getHintedHandoffThrottleDelay()
+    public static int getHintedHandoffThrottleInKB()
     {
-        return conf.hinted_handoff_throttle_delay_in_ms;
+        return conf.hinted_handoff_throttle_in_kb;
+    }
+
+    public static int getMaxHintsThread()
+    {
+        return conf.max_hints_delivery_threads;
     }
 
     public static boolean getPreheatKeyCache()
@@ -1019,7 +1081,7 @@ public class DatabaseDescriptor
         return conf.trickle_fsync_interval_in_kb;
     }
 
-    public static int getKeyCacheSizeInMB()
+    public static long getKeyCacheSizeInMB()
     {
         return keyCacheSizeInMB;
     }
@@ -1034,7 +1096,7 @@ public class DatabaseDescriptor
         return conf.key_cache_keys_to_save;
     }
 
-    public static int getRowCacheSizeInMB()
+    public static long getRowCacheSizeInMB()
     {
         return conf.row_cache_size_in_mb;
     }
@@ -1062,5 +1124,10 @@ public class DatabaseDescriptor
     public static boolean populateIOCacheOnFlush()
     {
         return conf.populate_io_cache_on_flush;
+    }
+
+    public static Config.InternodeCompression internodeCompression()
+    {
+        return conf.internode_compression;
     }
 }

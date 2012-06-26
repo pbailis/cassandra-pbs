@@ -24,10 +24,15 @@ package org.apache.cassandra.cache;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
+
 import org.junit.Test;
 
 import org.apache.cassandra.SchemaLoader;
 import org.apache.cassandra.db.ColumnFamily;
+
+import com.googlecode.concurrentlinkedhashmap.Weighers;
+
 import static org.apache.cassandra.Util.column;
 import static org.junit.Assert.*;
 
@@ -38,7 +43,7 @@ public class CacheProviderTest extends SchemaLoader
     String key3 = "key3";
     String key4 = "key4";
     String key5 = "key5";
-    private static final int CAPACITY = 4;
+    private static final long CAPACITY = 4;
     private String tableName = "Keyspace1";
     private String cfName = "Standard1";
 
@@ -103,7 +108,7 @@ public class CacheProviderTest extends SchemaLoader
     @Test
     public void testHeapCache() throws InterruptedException
     {
-        ICache<String, IRowCacheEntry> cache = ConcurrentLinkedHashCache.create(CAPACITY);
+        ICache<String, IRowCacheEntry> cache = ConcurrentLinkedHashCache.create(CAPACITY, Weighers.<String, IRowCacheEntry>entrySingleton());
         ColumnFamily cf = createCF();
         simpleCase(cf, cache);
         concurrentCase(cf, cache);
@@ -112,7 +117,7 @@ public class CacheProviderTest extends SchemaLoader
     @Test
     public void testSerializingCache() throws InterruptedException
     {
-        ICache<String, IRowCacheEntry> cache = new SerializingCache<String, IRowCacheEntry>(CAPACITY, false, new SerializingCacheProvider.RowCacheSerializer());
+        ICache<String, IRowCacheEntry> cache = SerializingCache.create(CAPACITY, Weighers.<FreeableMemory>singleton(), new SerializingCacheProvider.RowCacheSerializer());
         ColumnFamily cf = createCF();
         simpleCase(cf, cache);
         concurrentCase(cf, cache);
@@ -121,15 +126,17 @@ public class CacheProviderTest extends SchemaLoader
     @Test
     public void testKeys()
     {
+        UUID cfId = UUID.randomUUID();
+
         byte[] b1 = {1, 2, 3, 4};
-        RowCacheKey key1 = new RowCacheKey(123, ByteBuffer.wrap(b1));
+        RowCacheKey key1 = new RowCacheKey(cfId, ByteBuffer.wrap(b1));
         byte[] b2 = {1, 2, 3, 4};
-        RowCacheKey key2 = new RowCacheKey(123, ByteBuffer.wrap(b2));
+        RowCacheKey key2 = new RowCacheKey(cfId, ByteBuffer.wrap(b2));
         assertEquals(key1, key2);
         assertEquals(key1.hashCode(), key2.hashCode());
         
         byte[] b3 = {1, 2, 3, 5};
-        RowCacheKey key3 = new RowCacheKey(123, ByteBuffer.wrap(b3));
+        RowCacheKey key3 = new RowCacheKey(cfId, ByteBuffer.wrap(b3));
         assertNotSame(key1, key3);
         assertNotSame(key1.hashCode(), key3.hashCode());
     }

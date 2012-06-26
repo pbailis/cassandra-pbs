@@ -97,6 +97,7 @@ public class NodeCmd
         FLUSH,
         GETCOMPACTIONTHRESHOLD,
         GETENDPOINTS,
+        GETSSTABLES,
         GOSSIPINFO,
         IDS,
         INFO,
@@ -188,6 +189,7 @@ public class NodeCmd
 
         // Three args
         addCmdHelp(header, "getendpoints <keyspace> <cf> <key>", "Print the end points that owns the key");
+        addCmdHelp(header, "getsstables <keyspace> <cf> <key>", "Print the sstable filenames that own the key");
 
         // Four args
         addCmdHelp(header, "setcachecapacity <keyspace> <cfname> <keycachecapacity> <rowcachecapacity>", "Set the key and row cache capacities of a given column family");
@@ -238,7 +240,7 @@ public class NodeCmd
         catch (ConfigurationException ex)
         {
             ownerships = probe.getOwnership();
-            outs.printf("Note: Ownership information does not include topology, please specify a keyspace. \n");
+            outs.printf("Note: Ownership information does not include topology, please specify a keyspace. %n");
             outs.printf(format, "Address", "DC", "Rack", "Status", "State", "Load", "Owns", "Token");
         }
 
@@ -477,16 +479,16 @@ public class NodeCmd
         CompactionManagerMBean cm = probe.getCompactionManagerProxy();
         outs.println("pending tasks: " + cm.getPendingTasks());
         if (cm.getCompactions().size() > 0)
-            outs.printf("%25s%16s%16s%16s%16s%10s%n", "compaction type", "keyspace", "column family", "bytes compacted", "bytes total", "progress");
+            outs.printf("%25s%16s%16s%16s%16s%10s%10s%n", "compaction type", "keyspace", "column family", "completed", "total", "unit", "progress");
         long remainingBytes = 0;
         for (Map<String, String> c : cm.getCompactions())
         {
-            String percentComplete = new Long(c.get("totalBytes")) == 0
+            String percentComplete = new Long(c.get("total")) == 0
                                    ? "n/a"
-                                   : new DecimalFormat("0.00").format((double) new Long(c.get("bytesComplete")) / new Long(c.get("totalBytes")) * 100) + "%";
-            outs.printf("%25s%16s%16s%16s%16s%10s%n", c.get("taskType"), c.get("keyspace"), c.get("columnfamily"), c.get("bytesComplete"), c.get("totalBytes"), percentComplete);
+                                   : new DecimalFormat("0.00").format((double) new Long(c.get("completed")) / new Long(c.get("total")) * 100) + "%";
+            outs.printf("%25s%16s%16s%16s%16s%10s%10s%n", c.get("taskType"), c.get("keyspace"), c.get("columnfamily"), c.get("completed"), c.get("total"), c.get("unit"), percentComplete);
             if (c.get("taskType").equals(OperationType.COMPACTION.toString()))
-                remainingBytes += (new Long(c.get("totalBytes")) - new Long(c.get("bytesComplete")));
+                remainingBytes += (new Long(c.get("total")) - new Long(c.get("completed")));
         }
         long remainingTimeInSecs = compactionThroughput == 0 || remainingBytes == 0
                         ? -1 
@@ -578,7 +580,7 @@ public class NodeCmd
                 outs.println("\t\tWrite Count: " + cfstore.getWriteCount());
                 outs.println("\t\tWrite Latency: " + String.format("%01.3f", cfstore.getRecentWriteLatencyMicros() / 1000) + " ms.");
                 outs.println("\t\tPending Tasks: " + cfstore.getPendingTasks());
-                outs.println("\t\tBloom Filter False Postives: " + cfstore.getBloomFilterFalsePositives());
+                outs.println("\t\tBloom Filter False Positives: " + cfstore.getBloomFilterFalsePositives());
                 outs.println("\t\tBloom Filter False Ratio: " + String.format("%01.5f", cfstore.getRecentBloomFilterFalseRatio()));
                 outs.println("\t\tBloom Filter Space Used: " + cfstore.getBloomFilterDiskSpaceUsed());
                 outs.println("\t\tCompacted row minimum size: " + cfstore.getMinRowSize());
@@ -654,6 +656,15 @@ public class NodeCmd
         for (InetAddress anEndpoint : endpoints)
         {
            output.println(anEndpoint.getHostAddress());
+        }
+    }
+
+    private void printSSTables(String keyspace, String cf, String key, PrintStream output)
+    {
+        List<String> sstables = this.probe.getSSTables(keyspace, cf, key);
+        for (String sstable : sstables)
+        {
+            output.println(sstable);
         }
     }
 
@@ -748,12 +759,12 @@ public class NodeCmd
             Throwable inner = findInnermostThrowable(ioe);
             if (inner instanceof ConnectException)
             {
-                System.err.printf("Failed to connect to '%s:%d': %s\n", host, port, inner.getMessage());
+                System.err.printf("Failed to connect to '%s:%d': %s%n", host, port, inner.getMessage());
                 System.exit(1);
             }
             else if (inner instanceof UnknownHostException)
             {
-                System.err.printf("Cannot resolve '%s': unknown host\n", host);
+                System.err.printf("Cannot resolve '%s': unknown host%n", host);
                 System.exit(1);
             }
             else
@@ -917,6 +928,11 @@ public class NodeCmd
                 case PROXYHISTOGRAMS :
                     if (arguments.length != 0) { badUse("proxyhistograms does not take arguments"); }
                     nodeCmd.printProxyHistograms(System.out);
+                    break;
+
+                case GETSSTABLES:
+                    if (arguments.length != 3) { badUse("getsstables requires ks, cf and key args"); }
+                    nodeCmd.printSSTables(arguments[0], arguments[1], arguments[2], System.out);
                     break;
 
                 case REFRESH:

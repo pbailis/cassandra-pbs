@@ -43,8 +43,7 @@ public class LeveledCompactionTask extends CompactionTask
     {
         try
         {
-            int n = super.execute(collector);
-            return n;
+            return super.execute(collector);
         }
         finally
         {
@@ -63,9 +62,9 @@ public class LeveledCompactionTask extends CompactionTask
     }
 
     @Override
-    protected boolean newSSTableSegmentThresholdReached(SSTableWriter writer, long position)
+    protected boolean newSSTableSegmentThresholdReached(SSTableWriter writer) throws IOException
     {
-        return position > sstableSizeInMB * 1024L * 1024L;
+        return writer.getOnDiskFilePointer() > sstableSizeInMB * 1024L * 1024L;
     }
 
     @Override
