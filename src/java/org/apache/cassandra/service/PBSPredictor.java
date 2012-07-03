@@ -486,24 +486,12 @@ public class PBSPredictor implements PBSPredictorMBean
             return;
 
         Long startTime = messageIdToStartTimes.get(id);
-        if(startTime == null)
-        {
-            return;
-        }
 
         Collection<Long> wLatencies = messageIdToWLatencies.get(id);
-        if(wLatencies == null)
-        {
-            return;
-        }
 
         wLatencies.add(Math.max(0, responseCreationTime - startTime));
 
         Collection<Long> aLatencies = messageIdToALatencies.get(id);
-        if(aLatencies == null)
-        {
-            return;
-        }
 
         aLatencies.add(Math.max(0, receivedTime - responseCreationTime));
     }
@@ -519,24 +507,12 @@ public class PBSPredictor implements PBSPredictorMBean
             return;
 
         Long startTime = messageIdToStartTimes.get(id);
-        if(startTime == null)
-        {
-            return;
-        }
 
         Collection<Long> rLatencies = messageIdToRLatencies.get(id);
-        if(rLatencies == null)
-        {
-            return;
-        }
 
         rLatencies.add(Math.max(0, responseCreationTime-startTime));
 
         Collection<Long> sLatencies = messageIdToSLatencies.get(id);
-        if(sLatencies == null)
-        {
-            return;
-        }
         sLatencies.add(Math.max(0, receivedTime-responseCreationTime));
     }
 
