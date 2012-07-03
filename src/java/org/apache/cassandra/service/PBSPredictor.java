@@ -418,6 +418,9 @@ public class PBSPredictor implements PBSPredictorMBean
 
     public void startWriteOperation(String id)
     {
+        if(!doLogLatencies)
+            return;
+
         startWriteOperation(id, System.currentTimeMillis());
     }
 
@@ -448,6 +451,9 @@ public class PBSPredictor implements PBSPredictorMBean
 
     public void startReadOperation(String id)
     {
+        if(!doLogLatencies)
+            return;
+
         startReadOperation(id, System.currentTimeMillis());
     }
 
@@ -478,6 +484,9 @@ public class PBSPredictor implements PBSPredictorMBean
 
     public void logWriteResponse(String id, MessageIn response)
     {
+        if(!doLogLatencies)
+            return;
+
         logWriteResponse(id, response.getCreationTime(), System.currentTimeMillis());
     }
 
@@ -498,6 +507,9 @@ public class PBSPredictor implements PBSPredictorMBean
 
     public void logReadResponse(String id, MessageIn response)
     {
+        if(!doLogLatencies)
+            return;
+
         logReadResponse(id, response.getCreationTime(), System.currentTimeMillis());
     }
 
