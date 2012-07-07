@@ -142,20 +142,60 @@ public class PBSPredictor implements PBSPredictorMBean
      * latencies.
      */
 
-    private final Map<String, Long> messageIdToStartTimes = new ConcurrentHashMap<String, Long>();
+    /*
+     * Helper class which minimizes the number of HashMaps we maintain.
+     * For a given messageId, this class maintains the startTime of the message,
+     * and a queue for send times and reply times.
+     *
+     * sendLats corresponds to W and R, while replyLats is used for A and S.
+     */
+    private class MessageLatencyCollection
+    {
+        MessageLatencyCollection(Long startTime) 
+        {
+          this.startTime = startTime;
+          this.sendLats = new ConcurrentLinkedQueue<Long>();
+          this.replyLats = new ConcurrentLinkedQueue<Long>();
+        }
+
+        void addSendLat(Long sendLat)
+        {
+          sendLats.add(sendLat);
+        }
+
+        void addReplyLat(Long replyLat)
+        {
+          replyLats.add(replyLat);
+        }
+
+        Collection<Long> getSendLats()
+        {
+            return sendLats;
+        }
+
+        Collection<Long> getReplyLats()
+        {
+            return replyLats;
+        }
+
+        Long getStartTime()
+        {
+          return startTime;
+        }
+
+        Long startTime;
+        Collection<Long> sendLats;
+        Collection<Long> replyLats;
+    }
 
     // used for LRU replacement
     private final Queue<String> writeMessageIds = new LinkedBlockingQueue<String>();
     private final Queue<String> readMessageIds = new LinkedBlockingQueue<String>();
 
-    private final Map<String, Collection<Long>> messageIdToWLatencies =
-            new ConcurrentHashMap<String, Collection<Long>>();
-    private final Map<String, Collection<Long>> messageIdToALatencies =
-            new ConcurrentHashMap<String, Collection<Long>>();
-    private final Map<String, Collection<Long>> messageIdToRLatencies =
-            new ConcurrentHashMap<String, Collection<Long>>();
-    private final Map<String, Collection<Long>> messageIdToSLatencies =
-            new ConcurrentHashMap<String, Collection<Long>>();
+    private final Map<String, MessageLatencyCollection> messageIdToWriteLats =
+            new ConcurrentHashMap<String, MessageLatencyCollection>();
+    private final Map<String, MessageLatencyCollection> messageIdToReadLats =
+            new ConcurrentHashMap<String, MessageLatencyCollection>();
 
     private Random random;
     private boolean initialized = false;
@@ -429,9 +469,7 @@ public class PBSPredictor implements PBSPredictorMBean
         if(!doLogLatencies)
             return;
 
-        assert(!messageIdToStartTimes.containsKey(id));
-
-        messageIdToStartTimes.put(id, startTime);
+        assert(!messageIdToWriteLats.containsKey(id));
 
         writeMessageIds.add(id);
 
@@ -440,13 +478,10 @@ public class PBSPredictor implements PBSPredictorMBean
         if(writeMessageIds.size() > maxLoggedLatencies)
         {
             String toEvict = writeMessageIds.remove();
-            messageIdToStartTimes.remove(toEvict);
-            messageIdToWLatencies.remove(toEvict);
-            messageIdToALatencies.remove(toEvict);
+            messageIdToWriteLats.remove(toEvict);
         }
 
-        messageIdToWLatencies.put(id, new ConcurrentLinkedQueue<Long>());
-        messageIdToALatencies.put(id, new ConcurrentLinkedQueue<Long>());
+        messageIdToWriteLats.put(id, new MessageLatencyCollection(startTime));
     }
 
     public void startReadOperation(String id)
@@ -462,10 +497,7 @@ public class PBSPredictor implements PBSPredictorMBean
         if(!doLogLatencies)
             return;
 
-        assert(!messageIdToStartTimes.containsKey(id));
-
-        messageIdToStartTimes.put(id, startTime);
-
+        assert(!messageIdToReadLats.containsKey(id));
         readMessageIds.add(id);
 
         // LRU replacement of latencies
@@ -473,13 +505,10 @@ public class PBSPredictor implements PBSPredictorMBean
         if(readMessageIds.size() > maxLoggedLatencies)
         {
             String toEvict = readMessageIds.remove();
-            messageIdToStartTimes.remove(toEvict);
-            messageIdToRLatencies.remove(toEvict);
-            messageIdToSLatencies.remove(toEvict);
+            messageIdToReadLats.remove(toEvict);
         }
 
-        messageIdToRLatencies.put(id, new ConcurrentLinkedQueue<Long>());
-        messageIdToSLatencies.put(id, new ConcurrentLinkedQueue<Long>());
+        messageIdToReadLats.put(id, new MessageLatencyCollection(startTime));
     }
 
     public void logWriteResponse(String id, MessageIn response)
@@ -494,27 +523,15 @@ public class PBSPredictor implements PBSPredictorMBean
         if(!doLogLatencies)
             return;
 
-        Long startTime = messageIdToStartTimes.get(id);
-        if(startTime == null)
+        MessageLatencyCollection writeLatsCollection = messageIdToWriteLats.get(id);
+        if(writeLatsCollection == null)
         {
             return;
         }
 
-        Collection<Long> wLatencies = messageIdToWLatencies.get(id);
-        if(wLatencies == null)
-        {
-            return;
-        }
-
-        wLatencies.add(Math.max(0, responseCreationTime - startTime));
-
-        Collection<Long> aLatencies = messageIdToALatencies.get(id);
-        if(aLatencies == null)
-        {
-            return;
-        }
-
-        aLatencies.add(Math.max(0, receivedTime - responseCreationTime));
+        Long startTime = writeLatsCollection.getStartTime();
+        writeLatsCollection.addSendLat(Math.max(0, responseCreationTime - startTime));
+        writeLatsCollection.addReplyLat(Math.max(0, receivedTime - responseCreationTime));
     }
 
     public void logReadResponse(String id, MessageIn response)
@@ -530,46 +547,56 @@ public class PBSPredictor implements PBSPredictorMBean
         if(!doLogLatencies)
             return;
 
-        Long startTime = messageIdToStartTimes.get(id);
-        if(startTime == null)
+        MessageLatencyCollection readLatsCollection = messageIdToReadLats.get(id);
+        if(readLatsCollection == null)
         {
             return;
         }
 
-        Collection<Long> rLatencies = messageIdToRLatencies.get(id);
-        if(rLatencies == null)
-        {
-            return;
-        }
-
-        rLatencies.add(Math.max(0, responseCreationTime-startTime));
-
-        Collection<Long> sLatencies = messageIdToSLatencies.get(id);
-        if(sLatencies == null)
-        {
-            return;
-        }
-        sLatencies.add(Math.max(0, receivedTime-responseCreationTime));
+        Long startTime = readLatsCollection.getStartTime();
+        readLatsCollection.addSendLat(Math.max(0, responseCreationTime - startTime));
+        readLatsCollection.addReplyLat(Math.max(0, receivedTime - responseCreationTime));
     }
 
     Map<Integer, List<Long>> getOrderedWLatencies()
     {
-        return getOrderedLatencies(messageIdToWLatencies.values());
+        Collection<Collection<Long>> allWLatencies = new ArrayList<Collection<Long>>();
+        for (MessageLatencyCollection wlc : messageIdToWriteLats.values()) 
+        {
+            allWLatencies.add(wlc.getSendLats());
+        }
+
+        return getOrderedLatencies(allWLatencies);
     }
 
     Map<Integer, List<Long>> getOrderedALatencies()
     {
-        return getOrderedLatencies(messageIdToALatencies.values());
+        Collection<Collection<Long>> allALatencies = new ArrayList<Collection<Long>>();
+        for (MessageLatencyCollection wlc : messageIdToWriteLats.values()) 
+        {
+            allALatencies.add(wlc.getReplyLats());
+        }
+        return getOrderedLatencies(allALatencies);
     }
 
     Map<Integer, List<Long>> getOrderedRLatencies()
     {
-        return getOrderedLatencies(messageIdToRLatencies.values());
+        Collection<Collection<Long>> allRLatencies = new ArrayList<Collection<Long>>();
+        for (MessageLatencyCollection rlc : messageIdToReadLats.values()) 
+        {
+            allRLatencies.add(rlc.getSendLats());
+        }
+        return getOrderedLatencies(allRLatencies);
     }
 
     Map<Integer, List<Long>> getOrderedSLatencies()
     {
-        return getOrderedLatencies(messageIdToSLatencies.values());
+        Collection<Collection<Long>> allSLatencies = new ArrayList<Collection<Long>>();
+        for (MessageLatencyCollection rlc : messageIdToReadLats.values()) 
+        {
+            allSLatencies.add(rlc.getReplyLats());
+        }
+        return getOrderedLatencies(allSLatencies);
     }
 
     // Return the collected latencies indexed by response number instead of by messageID
