@@ -371,15 +371,23 @@ public class PBSPredictor implements PBSPredictorMBean
             {
                 long trialWLatency = getRandomLatencySample(wLatencies, replicaNo);
                 long trialALatency = getRandomLatencySample(aLatencies, replicaNo);
-                long trialRLatency = getRandomLatencySample(rLatencies, replicaNo);
-                long trialSLatency = getRandomLatencySample(sLatencies, replicaNo);
 
                 trialWLatencies.add(trialWLatency);
                 trialALatencies.add(trialALatency);
+
+                replicaWriteLatencies.add(trialWLatency + trialALatency);
+            }
+
+            // reads are only sent to R replicas - so pick R random read and
+            // response latencies
+            for(int replicaNo = 0; replicaNo < r; ++replicaNo)
+            {
+                long trialRLatency = getRandomLatencySample(rLatencies, replicaNo);
+                long trialSLatency = getRandomLatencySample(sLatencies, replicaNo);
+
                 trialRLatencies.add(trialRLatency);
                 trialSLatencies.add(trialSLatency);
 
-                replicaWriteLatencies.add(trialWLatency + trialALatency);
                 replicaReadLatencies.add(trialRLatency + trialSLatency);
             }
 
