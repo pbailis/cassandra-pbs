@@ -26,7 +26,6 @@ import org.apache.cassandra.SchemaLoader;
 
 public class PBSPredictorTest extends SchemaLoader
 {
-
     private static PBSPredictor predictor = PBSPredictor.instance();
 
     private void createWriteResponse(long W, long A, String id)
