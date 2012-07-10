@@ -292,7 +292,7 @@ public class Column implements IColumn
             valueValidator.validate(value());
     }
 
-    public boolean hasExpiredTombstones(int gcBefore)
+    public boolean hasIrrelevantData(int gcBefore)
     {
         return getLocalDeletionTime() < gcBefore;
     }
@@ -322,7 +322,7 @@ public class Column implements IColumn
         return new Column(decomposeName(names), value, timestamp);
     }
 
-    public static IColumn create(InetAddress value, long timestamp, String... names)
+    public static Column create(InetAddress value, long timestamp, String... names)
     {
         return new Column(decomposeName(names), InetAddressType.instance.decompose(value), timestamp);
     }

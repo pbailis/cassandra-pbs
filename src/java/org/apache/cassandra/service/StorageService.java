@@ -25,16 +25,12 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 import java.util.*;
-import java.util.Map.Entry;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
 
-import com.google.common.base.Supplier;
 import com.google.common.collect.*;
-
-import org.apache.cassandra.metrics.ClientRequestMetrics;
 import org.apache.log4j.Level;
 import org.apache.commons.lang.StringUtils;
 import org.slf4j.Logger;
@@ -48,22 +44,22 @@ import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.Table;
 import org.apache.cassandra.db.commitlog.CommitLog;
 import org.apache.cassandra.dht.*;
+import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.gms.*;
 import org.apache.cassandra.io.sstable.SSTableDeletingTask;
 import org.apache.cassandra.io.sstable.SSTableLoader;
 import org.apache.cassandra.io.util.FileUtils;
-import org.apache.cassandra.locator.AbstractReplicationStrategy;
-import org.apache.cassandra.locator.DynamicEndpointSnitch;
-import org.apache.cassandra.locator.IEndpointSnitch;
-import org.apache.cassandra.locator.TokenMetadata;
-import org.apache.cassandra.net.*;
+import org.apache.cassandra.locator.*;
+import org.apache.cassandra.metrics.ClientRequestMetrics;
+import org.apache.cassandra.net.IAsyncResult;
+import org.apache.cassandra.net.MessageOut;
+import org.apache.cassandra.net.MessagingService;
+import org.apache.cassandra.net.ResponseVerbHandler;
+import org.apache.cassandra.service.AntiEntropyService.RepairFuture;
 import org.apache.cassandra.service.AntiEntropyService.TreeRequestVerbHandler;
 import org.apache.cassandra.streaming.*;
 import org.apache.cassandra.thrift.*;
-import org.apache.cassandra.utils.FBUtilities;
-import org.apache.cassandra.utils.NodeId;
-import org.apache.cassandra.utils.Pair;
-import org.apache.cassandra.utils.WrappedRunnable;
+import org.apache.cassandra.utils.*;
 
 /**
  * This abstraction contains the token/identifier of this node
@@ -98,8 +94,7 @@ public class StorageService implements IEndpointStateChangeSubscriber, StorageSe
      * This pool is used by tasks that can have longer execution times, and usually are non periodic.
      */
     public static final DebuggableScheduledThreadPoolExecutor tasks = new DebuggableScheduledThreadPoolExecutor("NonPeriodicTasks");
-
-    /**
+/**
      * tasks that do not need to be waited for on shutdown/drain
      */
     public static final DebuggableScheduledThreadPoolExecutor optionalTasks = new DebuggableScheduledThreadPoolExecutor("OptionalTasks");
@@ -125,6 +120,12 @@ public class StorageService implements IEndpointStateChangeSubscriber, StorageSe
         return getRangesForEndpoint(table, FBUtilities.getBroadcastAddress());
     }
 
+    public Collection<Range<Token>> getLocalPrimaryRanges()
+    {
+        return getPrimaryRangesForEndpoint(FBUtilities.getBroadcastAddress());
+    }
+
+    @Deprecated
     public Range<Token> getLocalPrimaryRange()
     {
         return getPrimaryRangeForEndpoint(FBUtilities.getBroadcastAddress());
@@ -260,18 +261,18 @@ public class StorageService implements IEndpointStateChangeSubscriber, StorageSe
     {
         if (daemon == null)
         {
-            throw new IllegalStateException("No configured RPC daemon");
+            throw new IllegalStateException("No configured daemon");
         }
-        daemon.startRPCServer();
+        daemon.thriftServer.start();
     }
 
     public void stopRPCServer()
     {
         if (daemon == null)
         {
-            throw new IllegalStateException("No configured RPC daemon");
+            throw new IllegalStateException("No configured daemon");
         }
-        daemon.stopRPCServer();
+        daemon.thriftServer.stop();
     }
 
     public boolean isRPCServerRunning()
@@ -280,7 +281,34 @@ public class StorageService implements IEndpointStateChangeSubscriber, StorageSe
         {
             return false;
         }
-        return daemon.isRPCServerRunning();
+        return daemon.thriftServer.isRunning();
+    }
+
+    public void startNativeTransport()
+    {
+        if (daemon == null)
+        {
+            throw new IllegalStateException("No configured daemon");
+        }
+        daemon.nativeServer.start();
+    }
+
+    public void stopNativeTransport()
+    {
+        if (daemon == null)
+        {
+            throw new IllegalStateException("No configured  daemon");
+        }
+        daemon.nativeServer.stop();
+    }
+
+    public boolean isNativeTransportRunning()
+    {
+        if (daemon == null)
+        {
+            return false;
+        }
+        return daemon.nativeServer.isRunning();
     }
 
     public void stopClient()
@@ -932,25 +960,6 @@ public class StorageService implements IEndpointStateChangeSubscriber, StorageSe
         return rangeToEndpointMap;
     }
 
-    private Map<InetAddress, Collection<Range<Token>>> constructEndpointToRangeMap(String keyspace)
-    {
-        Multimap<InetAddress, Range<Token>> endpointToRangeMap = Multimaps.newListMultimap(new HashMap<InetAddress, Collection<Range<Token>>>(), new Supplier<List<Range<Token>>>()
-        {
-            public List<Range<Token>> get()
-            {
-                return Lists.newArrayList();
-            }
-        });
-
-        List<Range<Token>> ranges = getAllRanges(tokenMetadata.sortedTokens());
-        for (Range<Token> range : ranges)
-        {
-            for (InetAddress endpoint : Table.open(keyspace).getReplicationStrategy().getNaturalEndpoints(range.left))
-                endpointToRangeMap.put(endpoint, range);
-        }
-        return endpointToRangeMap.asMap();
-    }
-
     /*
      * Handle the reception of a new particular ApplicationState for a particular endpoint. Note that the value of the
      * ApplicationState has not necessarily "changed" since the last known value, if we already received the same update
@@ -1167,7 +1176,7 @@ public class StorageService implements IEndpointStateChangeSubscriber, StorageSe
             logger.info("Node " + endpoint + " state jump to leaving");
             tokenMetadata.updateNormalToken(token, endpoint);
         }
-        else if (!tokenMetadata.getToken(endpoint).equals(token))
+        else if (!tokenMetadata.getTokens(endpoint).contains(token))
         {
             logger.warn("Node " + endpoint + " 'leaving' token mismatch. Long network partition?");
             tokenMetadata.updateNormalToken(token, endpoint);
@@ -1337,7 +1346,7 @@ public class StorageService implements IEndpointStateChangeSubscriber, StorageSe
     {
         TokenMetadata tm = StorageService.instance.getTokenMetadata();
         Multimap<Range<Token>, InetAddress> pendingRanges = HashMultimap.create();
-        Map<Token, InetAddress> bootstrapTokens = tm.getBootstrapTokens();
+        BiMultiValMap<Token, InetAddress> bootstrapTokens = tm.getBootstrapTokens();
         Set<InetAddress> leavingEndpoints = tm.getLeavingEndpoints();
 
         if (bootstrapTokens.isEmpty() && leavingEndpoints.isEmpty() && tm.getMovingEndpoints().isEmpty())
@@ -1362,7 +1371,7 @@ public class StorageService implements IEndpointStateChangeSubscriber, StorageSe
         // all leaving nodes are gone.
         for (Range<Token> range : affectedRanges)
         {
-            Set<InetAddress> currentEndpoints = ImmutableSet.copyOf(strategy.calculateNaturalEndpoints(range.right, tm));
+            Set<InetAddress> currentEndpoints = ImmutableSet.copyOf(strategy.calculateNaturalEndpoints(range.right, tm.cloneOnlyTokenMap()));
             Set<InetAddress> newEndpoints = ImmutableSet.copyOf(strategy.calculateNaturalEndpoints(range.right, allLeftMetadata));
             pendingRanges.putAll(range, Sets.difference(newEndpoints, currentEndpoints));
         }
@@ -1372,17 +1381,14 @@ public class StorageService implements IEndpointStateChangeSubscriber, StorageSe
 
         // For each of the bootstrapping nodes, simply add and remove them one by one to
         // allLeftMetadata and check in between what their ranges would be.
-        synchronized (bootstrapTokens)
+        for (InetAddress endpoint : bootstrapTokens.inverse().keySet())
         {
-            for (Map.Entry<Token, InetAddress> entry : bootstrapTokens.entrySet())
-            {
-                InetAddress endpoint = entry.getValue();
-
-                allLeftMetadata.updateNormalToken(entry.getKey(), endpoint);
-                for (Range<Token> range : strategy.getAddressRanges(allLeftMetadata).get(endpoint))
-                    pendingRanges.put(range, endpoint);
-                allLeftMetadata.removeEndpoint(endpoint);
-            }
+            Collection<Token> tokens = bootstrapTokens.inverse().get(endpoint);
+            
+            allLeftMetadata.updateNormalTokens(tokens, endpoint);
+            for (Range<Token> range : strategy.getAddressRanges(allLeftMetadata).get(endpoint))
+                pendingRanges.put(range, endpoint);
+            allLeftMetadata.removeEndpoint(endpoint);
         }
 
         // At this stage pendingRanges has been updated according to leaving and bootstrapping nodes.
@@ -1421,7 +1427,7 @@ public class StorageService implements IEndpointStateChangeSubscriber, StorageSe
     private Multimap<InetAddress, Range<Token>> getNewSourceRanges(String table, Set<Range<Token>> ranges)
     {
         InetAddress myAddress = FBUtilities.getBroadcastAddress();
-        Multimap<Range<Token>, InetAddress> rangeAddresses = Table.open(table).getReplicationStrategy().getRangeAddresses(tokenMetadata);
+        Multimap<Range<Token>, InetAddress> rangeAddresses = Table.open(table).getReplicationStrategy().getRangeAddresses(tokenMetadata.cloneOnlyTokenMap());
         Multimap<InetAddress, Range<Token>> sourceRanges = HashMultimap.create();
         IFailureDetector failureDetector = FailureDetector.instance;
 
@@ -1551,7 +1557,7 @@ public class StorageService implements IEndpointStateChangeSubscriber, StorageSe
 
         // Find (for each range) all nodes that store replicas for these ranges as well
         for (Range<Token> range : ranges)
-            currentReplicaEndpoints.put(range, Table.open(table).getReplicationStrategy().calculateNaturalEndpoints(range.right, tokenMetadata));
+            currentReplicaEndpoints.put(range, Table.open(table).getReplicationStrategy().calculateNaturalEndpoints(range.right, tokenMetadata.cloneOnlyTokenMap()));
 
         TokenMetadata temp = tokenMetadata.cloneAfterAllLeft();
 
@@ -1979,18 +1985,17 @@ public class StorageService implements IEndpointStateChangeSubscriber, StorageSe
         if (Table.SYSTEM_TABLE.equals(tableName))
             return;
 
-        AntiEntropyService.RepairFuture future = forceTableRepair(getLocalPrimaryRange(), tableName, isSequential, columnFamilies);
-        if (future == null)
+        List<AntiEntropyService.RepairFuture> futures = new ArrayList<AntiEntropyService.RepairFuture>();
+        for (Range<Token> range : getLocalPrimaryRanges())
+        {
+            RepairFuture future = forceTableRepair(range, tableName, isSequential, columnFamilies);
+            if (future != null)
+                futures.add(future);
+        }
+        if (futures.isEmpty())
             return;
-        try
-        {
-            future.get();
-        }
-        catch (Exception e)
-        {
-            logger.error("Repair session " + future.session.getName() + " failed.", e);
-            throw new IOException("Some repair session(s) failed (see log for details).");
-        }
+        for (AntiEntropyService.RepairFuture future : futures)
+            FBUtilities.waitOnFuture(future);
     }
 
     public void forceTableRepairRange(String beginToken, String endToken, final String tableName, boolean isSequential, final String... columnFamilies) throws IOException
@@ -2043,9 +2048,8 @@ public class StorageService implements IEndpointStateChangeSubscriber, StorageSe
      * This method returns the predecessor of the endpoint ep on the identifier
      * space.
      */
-    InetAddress getPredecessor(InetAddress ep)
+    InetAddress getPredecessor(Token token)
     {
-        Token token = tokenMetadata.getToken(ep);
         return tokenMetadata.getEndpoint(tokenMetadata.getPredecessor(token));
     }
 
@@ -2053,10 +2057,19 @@ public class StorageService implements IEndpointStateChangeSubscriber, StorageSe
      * This method returns the successor of the endpoint ep on the identifier
      * space.
      */
-    public InetAddress getSuccessor(InetAddress ep)
+    public InetAddress getSuccessor(Token token)
     {
-        Token token = tokenMetadata.getToken(ep);
         return tokenMetadata.getEndpoint(tokenMetadata.getSuccessor(token));
+    }
+
+    /**
+     * Get the primary ranges for the specified endpoint.
+     * @param ep endpoint we are interested in.
+     * @return collection of ranges for the specified endpoint.
+     */
+    public Collection<Range<Token>> getPrimaryRangesForEndpoint(InetAddress ep)
+    {
+        return tokenMetadata.getPrimaryRangesFor(tokenMetadata.getTokens(ep));
     }
 
     /**
@@ -2064,6 +2077,7 @@ public class StorageService implements IEndpointStateChangeSubscriber, StorageSe
      * @param ep endpoint we are interested in.
      * @return range for the specified endpoint.
      */
+    @Deprecated
     public Range<Token> getPrimaryRangeForEndpoint(InetAddress ep)
     {
         return tokenMetadata.getPrimaryRangeFor(tokenMetadata.getToken(ep));
@@ -2373,7 +2387,9 @@ public class StorageService implements IEndpointStateChangeSubscriber, StorageSe
         Map<String, Multimap<InetAddress, Range<Token>>> rangesToFetch = new HashMap<String, Multimap<InetAddress, Range<Token>>>();
         Map<String, Multimap<Range<Token>, InetAddress>> rangesToStreamByTable = new HashMap<String, Multimap<Range<Token>, InetAddress>>();
 
-        TokenMetadata tokenMetaClone = tokenMetadata.cloneAfterAllSettled();
+        TokenMetadata tokenMetaCloneAllSettled = tokenMetadata.cloneAfterAllSettled();
+        // clone to avoid concurrent modification in calculateNaturalEndpoints
+        TokenMetadata tokenMetaClone = tokenMetadata.cloneOnlyTokenMap();
 
         // for each of the non system tables calculating new ranges
         // which current node will handle after move to the new token
@@ -2389,7 +2405,7 @@ public class StorageService implements IEndpointStateChangeSubscriber, StorageSe
 
             // ring ranges and endpoints associated with them
             // this used to determine what nodes should we ping about range data
-            Multimap<Range<Token>, InetAddress> rangeAddresses = strategy.getRangeAddresses(tokenMetadata);
+            Multimap<Range<Token>, InetAddress> rangeAddresses = strategy.getRangeAddresses(tokenMetaClone);
 
             // calculated parts of the ranges to request/stream from/to nodes in the ring
             Pair<Set<Range<Token>>, Set<Range<Token>>> rangesPerTable = calculateStreamAndFetchRanges(currentRanges, updatedRanges);
@@ -2418,8 +2434,8 @@ public class StorageService implements IEndpointStateChangeSubscriber, StorageSe
 
             for (Range<Token> toStream : rangesPerTable.left)
             {
-                Set<InetAddress> currentEndpoints = ImmutableSet.copyOf(strategy.calculateNaturalEndpoints(toStream.right, tokenMetadata));
-                Set<InetAddress> newEndpoints = ImmutableSet.copyOf(strategy.calculateNaturalEndpoints(toStream.right, tokenMetaClone));
+                Set<InetAddress> currentEndpoints = ImmutableSet.copyOf(strategy.calculateNaturalEndpoints(toStream.right, tokenMetaClone));
+                Set<InetAddress> newEndpoints = ImmutableSet.copyOf(strategy.calculateNaturalEndpoints(toStream.right, tokenMetaCloneAllSettled));
                 rangeWithEndpoints.putAll(toStream, Sets.difference(newEndpoints, currentEndpoints));
             }
 
@@ -2734,45 +2750,96 @@ public class StorageService implements IEndpointStateChangeSubscriber, StorageSe
         StorageProxy.truncateBlocking(keyspace, columnFamily);
     }
 
-    public Map<String, Float> getOwnership()
+    public boolean isDcAwareReplicationStrategy(String keyspace)
     {
-        List<Token> sortedTokens = new ArrayList<Token>(tokenMetadata.getTokenToEndpointMapForReading().keySet());
-        Collections.sort(sortedTokens);
-        Map<Token, Float> token_map = getPartitioner().describeOwnership(sortedTokens);
-        Map<String, Float> string_map = new HashMap<String, Float>();
-        for(Map.Entry<Token, Float> entry : token_map.entrySet())
-        {
-            string_map.put(entry.getKey().toString(), entry.getValue());
-        }
-        return string_map;
+        return SimpleStrategy.class != Table.open(keyspace).getReplicationStrategy().getClass();
     }
 
-    public Map<String, Float> effectiveOwnership(String keyspace) throws ConfigurationException
+    public Map<InetAddress, Float> getOwnership()
     {
-        Map<String, Float> effective = Maps.newHashMap();
+        List<Token> sortedTokens = tokenMetadata.sortedTokens();
+        // describeOwnership returns tokens in an unspecified order, let's re-order them
+        Map<Token, Float> tokenMap = new TreeMap<Token, Float>(getPartitioner().describeOwnership(sortedTokens));
+        Map<InetAddress, Float> stringMap = new LinkedHashMap<InetAddress, Float>();
+        for (Map.Entry<Token, Float> entry : tokenMap.entrySet())
+            stringMap.put(tokenMetadata.getEndpoint(entry.getKey()), entry.getValue());
+        return stringMap;
+    }
+
+    /**
+     * Calculates ownership. If there are multiple DC's and the replication strategy is DC aware then ownership will be
+     * calculated per dc, i.e. each DC will have total ring ownership divided amongst its nodes. Without replication
+     * total ownership will be a multiple of the number of DC's and this value will then go up within each DC depending
+     * on the number of replicas within itself. For DC unaware replication strategies, ownership without replication
+     * will be 100%.
+     * 
+     * @throws ConfigurationException
+     */
+    public LinkedHashMap<InetAddress, Float> effectiveOwnership(String keyspace) throws ConfigurationException
+    {
         if (Schema.instance.getNonSystemTables().size() <= 0)
             throw new ConfigurationException("Couldn't find any Non System Keyspaces to infer replication topology");
         if (keyspace == null && !hasSameReplication(Schema.instance.getNonSystemTables()))
             throw new ConfigurationException("Non System keyspaces doesnt have the same topology");
 
+        TokenMetadata metadata = tokenMetadata.cloneOnlyTokenMap();
+        
         if (keyspace == null)
             keyspace = Schema.instance.getNonSystemTables().get(0);
 
-        List<Token> sortedTokens = new ArrayList<Token>(tokenMetadata.getTokenToEndpointMapForReading().keySet());
-        Collections.sort(sortedTokens);
-        Map<Token, Float> ownership = getPartitioner().describeOwnership(sortedTokens);
+        Collection<Collection<InetAddress>> endpointsGroupedByDc = new ArrayList<Collection<InetAddress>>();
+        // mapping of dc's to nodes, use sorted map so that we get dcs sorted
+        SortedMap<String, Collection<InetAddress>> sortedDcsToEndpoints = new TreeMap<String, Collection<InetAddress>>();
+        sortedDcsToEndpoints.putAll(metadata.getTopology().getDatacenterEndpoints().asMap());
+        for (Collection<InetAddress> endpoints : sortedDcsToEndpoints.values())
+            endpointsGroupedByDc.add(endpoints);
 
-        for (Entry<InetAddress, Collection<Range<Token>>> ranges : constructEndpointToRangeMap(keyspace).entrySet())
+        Map<Token, Float> tokenOwnership = getPartitioner().describeOwnership(tokenMetadata.sortedTokens());
+        LinkedHashMap<InetAddress, Float> finalOwnership = Maps.newLinkedHashMap();
+
+        // calculate ownership per dc
+        for (Collection<InetAddress> endpoints : endpointsGroupedByDc)
         {
-            Token token = tokenMetadata.getToken(ranges.getKey());
-            for (Range<Token> range: ranges.getValue())
+            // sort the endpoints by their tokens
+            List<InetAddress> sortedEndpoints = Lists.newArrayListWithExpectedSize(endpoints.size());
+            sortedEndpoints.addAll(endpoints);
+
+            Collections.sort(sortedEndpoints, new Comparator<InetAddress>()
             {
-                float value = effective.get(token.toString()) == null ? 0.0F : effective.get(token.toString());
-                effective.put(token.toString(), value + ownership.get(range.left));
+                public int compare(InetAddress o1, InetAddress o2)
+                {
+                    byte[] b1 = o1.getAddress();
+                    byte[] b2 = o2.getAddress();
+
+                    if(b1.length < b2.length) return -1;
+                    if(b1.length > b2.length) return 1;
+
+                    for(int i = 0; i < b1.length; i++)
+                    {
+                        int left = (int)b1[i] & 0xFF;
+                        int right = (int)b2[i] & 0xFF;
+                        if (left < right)       return -1;
+                        else if (left > right)  return 1;
+                    }
+                    return 0;
+                }
+            });
+
+            // calculate the ownership with replication and add the endpoint to the final ownership map
+            for (InetAddress endpoint : endpoints)
+            {
+                float ownership = 0.0f;
+                for (Range<Token> range : getRangesForEndpoint(keyspace, endpoint))
+                {
+                    if (tokenOwnership.containsKey(range.left))
+                        ownership += tokenOwnership.get(range.left);
+                }
+                finalOwnership.put(endpoint, ownership);
             }
         }
-        return effective;
+        return finalOwnership;
     }
+
 
     private boolean hasSameReplication(List<String> list)
     {
@@ -3052,13 +3119,7 @@ public class StorageService implements IEndpointStateChangeSubscriber, StorageSe
             }
         };
 
-        SSTableLoader.OutputHandler oh = new SSTableLoader.OutputHandler()
-        {
-            public void output(String msg) { logger.info(msg); }
-            public void debug(String msg) { logger.debug(msg); }
-        };
-
-        SSTableLoader loader = new SSTableLoader(dir, client, oh);
+        SSTableLoader loader = new SSTableLoader(dir, client, new OutputHandler.LogOutput());
         try
         {
             loader.stream().get();
@@ -3071,7 +3132,7 @@ public class StorageService implements IEndpointStateChangeSubscriber, StorageSe
 
     public int getExceptionCount()
     {
-        return AbstractCassandraDaemon.exceptions.get();
+        return CassandraDaemon.exceptions.get();
     }
 
     public void rescheduleFailedDeletions()
@@ -3092,7 +3153,9 @@ public class StorageService implements IEndpointStateChangeSubscriber, StorageSe
      */
     public List<String> getRangeKeySample()
     {
-        List<DecoratedKey> keys = keySamples(ColumnFamilyStore.allUserDefined(), getLocalPrimaryRange());
+        List<DecoratedKey> keys = new ArrayList<DecoratedKey>();
+        for (Range<Token> range : getLocalPrimaryRanges())
+            keys.addAll(keySamples(ColumnFamilyStore.allUserDefined(), range));
 
         List<String> sampledKeys = new ArrayList<String>(keys.size());
         for (DecoratedKey key : keys)

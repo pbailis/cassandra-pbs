@@ -90,15 +90,13 @@ public abstract class AbstractThreadUnsafeSortedColumns implements ISortedColumn
         }
     }
 
-    // Implementations should implement this rather than addAll to avoid
-    // having to care about the deletion infos
-    protected abstract void addAllColumns(ISortedColumns columns, Allocator allocator, Function<IColumn, IColumn> transformation);
-
-    public void addAll(ISortedColumns columns, Allocator allocator, Function<IColumn, IColumn> transformation)
+    public long addAllWithSizeDelta(ISortedColumns cm, Allocator allocator, Function<IColumn, IColumn> transformation)
     {
-        addAllColumns(columns, allocator, transformation);
-        delete(columns.getDeletionInfo());
+        // sizeDelta is only needed by memtable updates which should not be using thread-unsafe containers
+        throw new UnsupportedOperationException();
     }
+
+    public abstract void addAll(ISortedColumns columns, Allocator allocator, Function<IColumn, IColumn> transformation);
 
     public boolean isEmpty()
     {

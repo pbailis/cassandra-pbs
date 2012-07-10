@@ -51,8 +51,7 @@ import org.apache.cassandra.scheduler.IRequestScheduler;
 import org.apache.cassandra.scheduler.NoScheduler;
 import org.apache.cassandra.service.CacheService;
 import org.apache.cassandra.service.MigrationManager;
-import org.apache.cassandra.service.StorageService;
-import org.apache.cassandra.thrift.CassandraDaemon;
+import org.apache.cassandra.thrift.ThriftServer;
 import org.apache.cassandra.utils.FBUtilities;
 import org.yaml.snakeyaml.Loader;
 import org.yaml.snakeyaml.TypeDescription;
@@ -67,6 +66,7 @@ public class DatabaseDescriptor
     private static InetAddress listenAddress; // leave null so we can fall through to getLocalHost
     private static InetAddress broadcastAddress;
     private static InetAddress rpcAddress;
+    private static InetAddress nativeTransportAddress;
     private static SeedProvider seedProvider;
 
     /* Hashing strategy Random or OPHF */
@@ -144,6 +144,9 @@ public class DatabaseDescriptor
             Yaml yaml = new Yaml(new Loader(constructor));
             conf = (Config)yaml.load(input);
 
+            if (!System.getProperty("os.arch").contains("64"))
+                logger.info("32bit JVM detected.  It is recommended to run Cassandra on a 64bit JVM for better performance.");
+
             if (conf.commitlog_sync == null)
             {
                 throw new ConfigurationException("Missing required directive CommitLogSync");
@@ -173,6 +176,9 @@ public class DatabaseDescriptor
                 }
                 logger.debug("Syncing log with a period of " + conf.commitlog_sync_period_in_ms);
             }
+
+            if (conf.commitlog_total_space_in_mb == null)
+                conf.commitlog_total_space_in_mb = System.getProperty("os.arch").contains("64") ? 1024 : 32;
 
             /* evaluate the DiskAccessMode Config directive, which also affects indexAccessMode selection */
             if (conf.disk_access_mode == Config.DiskAccessMode.auto)
@@ -306,6 +312,23 @@ public class DatabaseDescriptor
                 rpcAddress = FBUtilities.getLocalAddress();
             }
 
+            /* Local IP or hostname to bind RPC server to */
+            if (conf.native_transport_address != null)
+            {
+                try
+                {
+                    nativeTransportAddress = InetAddress.getByName(conf.native_transport_address);
+                }
+                catch (UnknownHostException e)
+                {
+                    throw new ConfigurationException("Unknown host in native_transport_address" + conf.native_transport_address);
+                }
+            }
+            else
+            {
+                nativeTransportAddress = FBUtilities.getLocalAddress();
+            }
+
             if (conf.thrift_framed_transport_size_in_mb <= 0)
                 throw new ConfigurationException("thrift_framed_transport_size_in_mb must be positive");
 
@@ -381,7 +404,7 @@ public class DatabaseDescriptor
             if (conf.stream_throughput_outbound_megabits_per_sec == null)
                 conf.stream_throughput_outbound_megabits_per_sec = 400;
 
-            if (!CassandraDaemon.rpc_server_types.contains(conf.rpc_server_type.toLowerCase()))
+            if (!ThriftServer.rpc_server_types.contains(conf.rpc_server_type.toLowerCase()))
                 throw new ConfigurationException("Unknown rpc_server_type: " + conf.rpc_server_type);
             if (conf.rpc_min_threads == null)
                 conf.rpc_min_threads = 16;
@@ -639,11 +662,6 @@ public class DatabaseDescriptor
         return requestSchedulerId;
     }
 
-    public static String getJobTrackerAddress()
-    {
-        return conf.job_tracker_host;
-    }
-
     public static int getColumnIndexSize()
     {
         return conf.column_index_size_in_kb * 1024;
@@ -667,11 +685,6 @@ public class DatabaseDescriptor
     public static int getMaxStreamingRetries()
     {
         return conf.max_streaming_retries;
-    }
-
-    public static String getJobJarLocation()
-    {
-        return conf.job_jar_file_location;
     }
 
     public static int getStoragePort()
@@ -874,6 +887,11 @@ public class DatabaseDescriptor
         broadcastAddress = broadcastAdd;
     }
 
+    public static boolean startRpc()
+    {
+        return conf.start_rpc;
+    }
+
     public static InetAddress getRpcAddress()
     {
         return rpcAddress;
@@ -907,6 +925,26 @@ public class DatabaseDescriptor
     public static Integer getRpcRecvBufferSize()
     {
         return conf.rpc_recv_buff_size_in_bytes;
+    }
+
+    public static boolean startNativeTransport()
+    {
+        return conf.start_native_transport;
+    }
+
+    public static InetAddress getNativeTransportAddress()
+    {
+        return nativeTransportAddress;
+    }
+
+    public static int getNativeTransportPort()
+    {
+        return Integer.parseInt(System.getProperty("cassandra.native_transport_port", conf.native_transport_port.toString()));
+    }
+
+    public static Integer getNativeTransportMaxThreads()
+    {
+        return conf.native_transport_max_threads;
     }
 
     public static double getCommitLogSyncBatchWindow()

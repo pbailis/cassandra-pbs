@@ -157,6 +157,11 @@ public class AtomicSortedColumns implements ISortedColumns
 
     public void addAll(ISortedColumns cm, Allocator allocator, Function<IColumn, IColumn> transformation)
     {
+        addAllWithSizeDelta(cm, allocator, transformation);
+    }
+
+    public long addAllWithSizeDelta(ISortedColumns cm, Allocator allocator, Function<IColumn, IColumn> transformation)
+    {
         /*
          * This operation needs to atomicity and isolation. To that end, we
          * add the new column to a copy of the map (a cheap O(1) snapTree
@@ -169,22 +174,27 @@ public class AtomicSortedColumns implements ISortedColumns
          * we bail early, avoiding unnecessary work if possible.
          */
         Holder current, modified;
+        long sizeDelta;
+
         main_loop:
         do
         {
+            sizeDelta = 0;
             current = ref.get();
             DeletionInfo newDelInfo = current.deletionInfo.add(cm.getDeletionInfo());
             modified = new Holder(current.map.clone(), newDelInfo);
 
             for (IColumn column : cm.getSortedColumns())
             {
-                modified.addColumn(transformation.apply(column), allocator);
+                sizeDelta += modified.addColumn(transformation.apply(column), allocator);
                 // bail early if we know we've been beaten
                 if (ref.get() != current)
                     continue main_loop;
             }
         }
         while (!ref.compareAndSet(current, modified));
+
+        return sizeDelta;
     }
 
     public boolean replace(IColumn oldColumn, IColumn newColumn)
@@ -325,24 +335,28 @@ public class AtomicSortedColumns implements ISortedColumns
             return new Holder(new SnapTreeMap<ByteBuffer, IColumn>(map.comparator()), deletionInfo);
         }
 
-        void addColumn(IColumn column, Allocator allocator)
+        long addColumn(IColumn column, Allocator allocator)
         {
             ByteBuffer name = column.name();
-            IColumn oldColumn;
-            while ((oldColumn = map.putIfAbsent(name, column)) != null)
+            while (true)
             {
+                IColumn oldColumn = map.putIfAbsent(name, column);
+                if (oldColumn == null)
+                    return column.dataSize();
+
                 if (oldColumn instanceof SuperColumn)
                 {
                     assert column instanceof SuperColumn;
+                    long previousSize = oldColumn.dataSize();
                     ((SuperColumn) oldColumn).putColumn((SuperColumn)column, allocator);
-                    break;  // Delegated to SuperColumn
+                    return oldColumn.dataSize() - previousSize;
                 }
                 else
                 {
                     // calculate reconciled col from old (existing) col and new col
                     IColumn reconciledColumn = column.reconcile(oldColumn, allocator);
                     if (map.replace(name, oldColumn, reconciledColumn))
-                        break;
+                        return reconciledColumn.dataSize() - oldColumn.dataSize();
 
                     // We failed to replace column due to a concurrent update or a concurrent removal. Keep trying.
                     // (Currently, concurrent removal should not happen (only updates), but let us support that anyway.)

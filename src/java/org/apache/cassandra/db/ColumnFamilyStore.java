@@ -29,7 +29,10 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
 import javax.management.*;
 
-import com.google.common.collect.*;
+import com.google.common.collect.AbstractIterator;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Iterables;
+import com.google.common.collect.Sets;
 import com.google.common.util.concurrent.Futures;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,8 +50,8 @@ import org.apache.cassandra.db.commitlog.ReplayPosition;
 import org.apache.cassandra.db.compaction.AbstractCompactionStrategy;
 import org.apache.cassandra.db.compaction.CompactionManager;
 import org.apache.cassandra.db.compaction.LeveledCompactionStrategy;
-import org.apache.cassandra.db.filter.ExtendedFilter;
 import org.apache.cassandra.db.compaction.OperationType;
+import org.apache.cassandra.db.filter.ExtendedFilter;
 import org.apache.cassandra.db.filter.IFilter;
 import org.apache.cassandra.db.filter.QueryFilter;
 import org.apache.cassandra.db.filter.QueryPath;
@@ -201,7 +204,8 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
                               IPartitioner partitioner,
                               int generation,
                               CFMetaData metadata,
-                              Directories directories)
+                              Directories directories,
+                              boolean loadSSTables)
     {
         assert metadata != null : "null metadata for " + table + ":" + columnFamilyName;
 
@@ -222,8 +226,13 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
 
         // scan for sstables corresponding to this cf and load them
         data = new DataTracker(this);
-        Directories.SSTableLister sstables = directories.sstableLister().skipCompacted(true).skipTemporary(true);
-        data.addInitialSSTables(SSTableReader.batchOpen(sstables.list().entrySet(), data, metadata, this.partitioner));
+
+        if (loadSSTables)
+        {
+            Directories.SSTableLister sstables = directories.sstableLister().skipCompacted(true).skipTemporary(true);
+            data.addInitialSSTables(SSTableReader.batchOpen(sstables.list().entrySet(), data, metadata, this.partitioner));
+        }
+
         if (caching == Caching.ALL || caching == Caching.KEYS_ONLY)
             CacheService.instance.keyCache.loadSaved(this);
 
@@ -298,15 +307,21 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         return data.getMeanColumns();
     }
 
-    public static ColumnFamilyStore createColumnFamilyStore(Table table, String columnFamily)
+    public static ColumnFamilyStore createColumnFamilyStore(Table table, String columnFamily, boolean loadSSTables)
     {
-        return createColumnFamilyStore(table, columnFamily, StorageService.getPartitioner(), Schema.instance.getCFMetaData(table.name, columnFamily));
+        return createColumnFamilyStore(table, columnFamily, StorageService.getPartitioner(), Schema.instance.getCFMetaData(table.name, columnFamily), loadSSTables);
     }
 
-    public static synchronized ColumnFamilyStore createColumnFamilyStore(Table table,
+    public static ColumnFamilyStore createColumnFamilyStore(Table table, String columnFamily, IPartitioner partitioner, CFMetaData metadata)
+    {
+        return createColumnFamilyStore(table, columnFamily, partitioner, metadata, true);
+    }
+
+    private static synchronized ColumnFamilyStore createColumnFamilyStore(Table table,
                                                                          String columnFamily,
                                                                          IPartitioner partitioner,
-                                                                         CFMetaData metadata)
+                                                                         CFMetaData metadata,
+                                                                         boolean loadSSTables)
     {
         // get the max generation number, to prevent generation conflicts
         Directories directories = Directories.create(table.name, columnFamily);
@@ -322,7 +337,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
         Collections.sort(generations);
         int value = (generations.size() > 0) ? (generations.get(generations.size() - 1)) : 0;
 
-        return new ColumnFamilyStore(table, columnFamily, partitioner, value, metadata, directories);
+        return new ColumnFamilyStore(table, columnFamily, partitioner, value, metadata, directories, loadSSTables);
     }
 
     /**
@@ -869,9 +884,10 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
     /**
      * Calculate expected file size of SSTable after compaction.
      *
-     * If operation type is {@code CLEANUP}, then we calculate expected file size
-     * with checking token range to be eliminated.
-     * Other than that, we just add up all the files' size, which is the worst case file
+     * If operation type is {@code CLEANUP} and we're not dealing with an index sstable,
+     * then we calculate expected file size with checking token range to be eliminated.
+     *
+     * Otherwise, we just add up all the files' size, which is the worst case file
      * size for compaction of all the list of files given.
      *
      * @param sstables SSTables to calculate expected compacted file size
@@ -880,21 +896,18 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
      */
     public long getExpectedCompactedFileSize(Iterable<SSTableReader> sstables, OperationType operation)
     {
-        long expectedFileSize = 0;
-        if (operation == OperationType.CLEANUP)
+        if (operation != OperationType.CLEANUP || isIndex())
         {
-            Collection<Range<Token>> ranges = StorageService.instance.getLocalRanges(table.name);
-            for (SSTableReader sstable : sstables)
-            {
-                List<Pair<Long, Long>> positions = sstable.getPositionsForRanges(ranges);
-                for (Pair<Long, Long> position : positions)
-                    expectedFileSize += position.right - position.left;
-            }
+            return SSTable.getTotalBytes(sstables);
         }
-        else
+
+        long expectedFileSize = 0;
+        Collection<Range<Token>> ranges = StorageService.instance.getLocalRanges(table.name);
+        for (SSTableReader sstable : sstables)
         {
-            for (SSTableReader sstable : sstables)
-                expectedFileSize += sstable.onDiskLength();
+            List<Pair<Long, Long>> positions = sstable.getPositionsForRanges(ranges);
+            for (Pair<Long, Long> position : positions)
+                expectedFileSize += position.right - position.left;
         }
         return expectedFileSize;
     }

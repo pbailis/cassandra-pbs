@@ -20,17 +20,18 @@ package org.apache.cassandra.db.compaction;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
-import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.config.DatabaseDescriptor;
+import org.apache.cassandra.db.ColumnFamily;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.DataTracker;
 import org.apache.cassandra.db.DecoratedKey;
 import org.apache.cassandra.io.sstable.SSTableIdentityIterator;
 import org.apache.cassandra.io.sstable.SSTableReader;
+import org.apache.cassandra.service.CacheService;
 import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.utils.Throttle;
 
@@ -63,6 +64,15 @@ public class CompactionController
 
     public CompactionController(ColumnFamilyStore cfs, Collection<SSTableReader> sstables, int gcBefore, boolean forceDeserialize)
     {
+        this(cfs,
+             gcBefore,
+             DataTracker.buildIntervalTree(cfs.getOverlappingSSTables(sstables)));
+    }
+
+    protected CompactionController(ColumnFamilyStore cfs,
+                                   int gcBefore,
+                                   DataTracker.SSTableIntervalTree overlappingTree)
+    {
         assert cfs != null;
         this.cfs = cfs;
         this.gcBefore = gcBefore;
@@ -71,8 +81,7 @@ public class CompactionController
         // add 5 minutes to be sure we're on the safe side in terms of thread safety (though we should be fine in our
         // current 'stop all write during memtable switch' situation).
         this.mergeShardBefore = (int) ((cfs.oldestUnflushedMemtable() + 5 * 3600) / 1000);
-        Set<SSTableReader> overlappingSSTables = cfs.getOverlappingSSTables(sstables);
-        overlappingTree = DataTracker.buildIntervalTree(overlappingSSTables);
+        this.overlappingTree = overlappingTree;
     }
 
     public String getKeyspace()
@@ -105,6 +114,20 @@ public class CompactionController
         cfs.invalidateCachedRow(key);
     }
 
+    public void removeDeletedInCache(DecoratedKey key)
+    {
+        // For the copying cache, we'd need to re-serialize the updated cachedRow, which would be racy
+        // vs other updates.  We'll just ignore it instead, since the next update to this row will invalidate it
+        // anyway, so the odds of a "tombstones consuming memory indefinitely" problem are minimal.
+        // See https://issues.apache.org/jira/browse/CASSANDRA-3921 for more discussion.
+        if (CacheService.instance.rowCache.isPutCopying())
+            return;
+
+        ColumnFamily cachedRow = cfs.getRawCachedRow(key);
+        if (cachedRow != null)
+            ColumnFamilyStore.removeDeleted(cachedRow, gcBefore);
+    }
+
     /**
      * @return an AbstractCompactedRow implementation to write the merged rows in question.
      *
@@ -133,7 +156,7 @@ public class CompactionController
     {
         return getCompactedRow(Collections.singletonList(row));
     }
-    
+
     public void mayThrottle(long currentBytes)
     {
         throttle.throttle(currentBytes);
