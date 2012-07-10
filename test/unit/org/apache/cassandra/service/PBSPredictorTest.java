@@ -21,10 +21,7 @@ package org.apache.cassandra.service;
 import org.junit.Test;
 import static org.junit.Assert.*;
 
-import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.SchemaLoader;
-
-public class PBSPredictorTest extends SchemaLoader
+public class PBSPredictorTest
 {
     private static PBSPredictor predictor = PBSPredictor.instance();
 
